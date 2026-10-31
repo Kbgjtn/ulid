@@ -212,3 +212,9 @@ pub const Generator = struct {
         return Ulid.init(last.timestamp(), r);
     }
 };
+
+test {
+    _ = @import("tests/encode.zig");
+    _ = @import("tests/decode.zig");
+    _ = @import("tests/generator.zig");
+}
