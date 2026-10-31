@@ -7,5 +7,6 @@ test {
     _ = @import("tests/generator.zig");
     _ = @import("tests/vectors.zig");
     _ = @import("tests/uuid.zig");
+    _ = @import("tests/json.zig");
     _ = @import("tests/fuzz.zig");
 }
