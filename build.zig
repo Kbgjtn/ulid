@@ -45,12 +45,18 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks. The tests have their own
     // root, src/tests.zig, so that src/Ulid.zig imports nothing outside the
     // package paths in build.zig.zon.
+    // `zig build test --fuzz -Dllvm`: the self-hosted x86_64 backend emits no
+    // coverage instrumentation, so 0.16.0's fuzzer has nothing to steer by.
+    const llvm = b.option(bool, "llvm", "Build the tests with LLVM (needed for --fuzz)") orelse false;
     const mod_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = if (llvm) true else null,
+        // Zig 0.16.0's stock runner breaks --fuzz; see tools/test_runner.zig.
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .server },
     });
 
     // A run step that will run the test executable.

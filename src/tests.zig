@@ -6,4 +6,5 @@ test {
     _ = @import("tests/decode.zig");
     _ = @import("tests/generator.zig");
     _ = @import("tests/vectors.zig");
+    _ = @import("tests/fuzz.zig");
 }
