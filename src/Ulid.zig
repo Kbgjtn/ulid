@@ -232,6 +232,47 @@ pub fn fmtUuid(u: Ulid) std.fmt.Alt(Ulid, formatUuid) {
     return .{ .data = u };
 }
 
+/// Writes `u` to `std.json` as its canonical 26-character string, so a
+/// struct field of type `Ulid` serializes as `"01ARZ3NDEKTSV4RRFFQ69G5FAV"`
+/// rather than an array of bytes.
+pub fn jsonStringify(u: Ulid, jws: anytype) !void {
+    var buf: [encoded_len]u8 = undefined;
+    u.encode(&buf);
+    try jws.write(@as([]const u8, &buf));
+}
+
+/// Reads a `Ulid` from a JSON string with `decode` and the default
+/// `DecodeOptions` (lowercase accepted, aliases rejected). A value that is
+/// not a string returns `error.UnexpectedToken`. Decode errors map onto
+/// `std.json`'s own: `UlidInvalidLength` to `error.LengthMismatch`,
+/// `UlidInvalidCharacter` to `error.InvalidCharacter` and `UlidOverflow` to
+/// `error.Overflow`.
+pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Ulid {
+    const token = try source.nextAllocMax(allocator, .alloc_if_needed, options.max_value_len.?);
+    const s = switch (token) {
+        .string => |s| s,
+        .allocated_string => |s| s,
+        else => return error.UnexpectedToken,
+    };
+    defer if (token == .allocated_string) allocator.free(s);
+    return decode(s, .{}) catch |err| jsonError(err);
+}
+
+/// Reads a `Ulid` from a parsed `std.json.Value`, with the same rules and
+/// errors as `jsonParse`.
+pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) !Ulid {
+    if (source != .string) return error.UnexpectedToken;
+    return decode(source.string, .{}) catch |err| jsonError(err);
+}
+
+fn jsonError(err: DecodeError) error{ LengthMismatch, InvalidCharacter, Overflow } {
+    return switch (err) {
+        error.UlidInvalidLength => error.LengthMismatch,
+        error.UlidInvalidCharacter => error.InvalidCharacter,
+        error.UlidOverflow => error.Overflow,
+    };
+}
+
 /// A monotonic ULID generator. Each ULID it returns is greater than every
 /// earlier one it returned. The caller passes in the time and the random
 /// source, so tests can use a fixed clock and a seeded RNG.
