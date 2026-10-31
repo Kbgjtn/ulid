@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
-    const mod = b.addModule("ulid", .{
+    _ = b.addModule("ulid", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
         // in this file, which means that if you have declarations that you
@@ -42,11 +42,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Creates an executable that will run `test` blocks from the provided module.
-    // Here `mod` needs to define a target, which is why earlier we made sure to
-    // set the releative field.
+    // Creates an executable that will run `test` blocks. The tests have their own
+    // root, src/tests.zig, so that src/Ulid.zig imports nothing outside the
+    // package paths in build.zig.zon.
     const mod_tests = b.addTest(.{
-        .root_module = mod,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // A run step that will run the test executable.
