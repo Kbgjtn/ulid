@@ -184,6 +184,54 @@ pub fn decode(text: []const u8, options: DecodeOptions) DecodeError!Ulid {
     return u;
 }
 
+/// Returns `u` as an RFC 9562 UUIDv7: the same 16 bytes with the version
+/// nibble (byte 6, high 4 bits) set to 7 and the variant (byte 8, top 2
+/// bits) set to `0b10`. This overwrites 6 of the 80 random bits, so
+/// `fromUuidV7(u.toUuidV7())` is not `u` unless those bits already matched.
+/// The timestamp is unchanged.
+pub fn toUuidV7(u: Ulid) [16]u8 {
+    var b = u.bytes;
+    b[6] = (b[6] & 0x0F) | 0x70;
+    b[8] = (b[8] & 0x3F) | 0x80;
+    return b;
+}
+
+/// Reads a UUIDv7 as a ULID. Both use a 48-bit big-endian millisecond
+/// timestamp first, so the bytes are copied unchanged and nothing is lost.
+/// Returns `error.UuidNotV7` unless the version is 7 and the variant is
+/// the RFC 9562 one (`0b10`).
+pub fn fromUuidV7(bytes: [16]u8) error{UuidNotV7}!Ulid {
+    if (bytes[6] >> 4 != 0x07) return error.UuidNotV7;
+    if (bytes[8] >> 6 != 0b10) return error.UuidNotV7;
+    return .{ .bytes = bytes };
+}
+
+/// Writes `u` as a UUIDv7 in the lowercase `8-4-4-4-12` hex form, after
+/// the same conversion as `toUuidV7`. See `fmtUuid`.
+pub fn formatUuid(u: Ulid, w: *Io.Writer) Io.Writer.Error!void {
+    const hex = "0123456789abcdef";
+    const b = u.toUuidV7();
+
+    var buf: [36]u8 = undefined;
+    var o: usize = 0;
+    for (b, 0..) |byte, i| {
+        if (i == 4 or i == 6 or i == 8 or i == 10) {
+            buf[o] = '-';
+            o += 1;
+        }
+        buf[o] = hex[byte >> 4];
+        buf[o + 1] = hex[byte & 0x0F];
+        o += 2;
+    }
+
+    try w.writeAll(&buf);
+}
+
+/// Returns a value that prints `u` as a UUIDv7 with `"{f}"`. See `formatUuid`.
+pub fn fmtUuid(u: Ulid) std.fmt.Alt(Ulid, formatUuid) {
+    return .{ .data = u };
+}
+
 /// A monotonic ULID generator. Each ULID it returns is greater than every
 /// earlier one it returned. The caller passes in the time and the random
 /// source, so tests can use a fixed clock and a seeded RNG.
