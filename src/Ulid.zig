@@ -184,13 +184,13 @@ pub fn decode(text: []const u8, options: DecodeOptions) DecodeError!Ulid {
     return u;
 }
 
-/// Returns `u` as an RFC 9562 UUIDv7: the same 16 bytes with the version
+/// Returns `ulid` as an RFC 9562 UUIDv7: the same 16 bytes with the version
 /// nibble (byte 6, high 4 bits) set to 7 and the variant (byte 8, top 2
 /// bits) set to `0b10`. This overwrites 6 of the 80 random bits, so
 /// `fromUuidV7(u.toUuidV7())` is not `u` unless those bits already matched.
 /// The timestamp is unchanged.
-pub fn toUuidV7(u: Ulid) [16]u8 {
-    var b = u.bytes;
+pub fn toUuidV7(ulid: Ulid) [16]u8 {
+    var b = ulid.bytes;
     b[6] = (b[6] & 0x0F) | 0x70;
     b[8] = (b[8] & 0x3F) | 0x80;
     return b;
