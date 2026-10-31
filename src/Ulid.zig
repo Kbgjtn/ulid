@@ -127,6 +127,26 @@ const tables = blk: {
     break :blk all;
 };
 
+/// Decodes exactly `@bitSizeOf(T) / 5` characters into a T, left to right.
+/// No branch in the loop body: invalid entries are 0xFF, and valid digits are
+/// < 32, so OR-ing every digit into `bad` and checking once at the end is enough.
+fn decodeChunk(
+    comptime T: type,
+    t: *const [256]u8,
+    chars: *const [@bitSizeOf(T) / 5]u8,
+) DecodeError!T {
+    // Accumulate in a u64: odd widths like u45 would truncate every step.
+    var v: u64 = 0;
+    var bad: u8 = 0;
+    for (chars) |c| {
+        const d = t[c];
+        bad |= d;
+        v = (v << 5) | d;
+    }
+    if (bad >= 32) return error.UlidInvalidCharacter;
+    return @truncate(v);
+}
+
 /// Parses the 26-character text form of a ULID. Allocates nothing and
 /// works at comptime.
 ///
@@ -137,19 +157,30 @@ const tables = blk: {
 /// `error.UlidOverflow`, when it is a valid character above '7'.
 pub fn decode(text: []const u8, options: DecodeOptions) DecodeError!Ulid {
     if (text.len != encoded_len) return error.UlidInvalidLength;
+
     const t = &tables[@intFromBool(options.lowercase)][@intFromBool(options.aliases)];
-    // 26 * 5 = 130 bits, so the first char may only carry the top 3 bits.
-    const first = t[text[0]];
-    if (first == invalid) return error.UlidInvalidCharacter;
-    if (first > 7) return error.UlidOverflow;
-    var v: u128 = first;
-    for (text[1..]) |c| {
-        const d = t[c];
-        if (d == invalid) return error.UlidInvalidCharacter;
-        v = (v << 5) | @as(u128, d);
-    }
+
+    // Character 0 carries only the top 3 bits of the 48-bit timestamp.
+    // Check it first (invalid character, then overflow), before any shifting.
+    const d0 = t[text[0]];
+    if (d0 == invalid) return error.UlidInvalidCharacter;
+    if (d0 > 7) return error.UlidOverflow;
+
+    // Three independent dependency chains, each fits in one 64-bit register.
+    const ts_rest = try decodeChunk(u45, t, text[1..10]); // chars 1..9  -> 45 bits
+    const rnd_hi = try decodeChunk(u40, t, text[10..18]); // chars 10..17 -> 40 bits
+    const rnd_lo = try decodeChunk(u40, t, text[18..26]); // chars 18..25 -> 40 bits
+
+    const ts: u64 = (@as(u64, d0) << 45) | ts_rest;
+
+    // Pack the 128 bits into two u64 halves and store each with one byte
+    // swap, instead of three odd-width big-endian writes.
+    const hi: u64 = (ts << 16) | (@as(u64, rnd_hi) >> 24);
+    const lo: u64 = (@as(u64, rnd_hi) << 40) | rnd_lo;
+
     var u: Ulid = undefined;
-    std.mem.writeInt(u128, &u.bytes, v, .big);
+    std.mem.writeInt(u64, u.bytes[0..8], hi, .big);
+    std.mem.writeInt(u64, u.bytes[8..16], lo, .big);
     return u;
 }
 
@@ -189,26 +220,22 @@ pub const Generator = struct {
     /// at its maximum. An earlier `ms` is handled as `on_backwards` says.
     /// On error, `last` is unchanged.
     pub fn next(g: *Generator, ms: u48, random: std.Random) Error!Ulid {
-        const result = if (g.last) |last| blk: {
-            const last_ts = last.timestamp();
+        // Update last in place, so the same-ms path touches only the
+        // random bytes instead of copying the whole optional out and back.
+        if (g.last) |*last| {
+            const last_ts = std.mem.readInt(u48, last.bytes[0..6], .big);
             if (ms > last_ts) {
-                break :blk Ulid.init(ms, random.int(u80));
-            } else if (ms == last_ts) {
-                break :blk try bump(last);
-            } else switch (g.on_backwards) {
-                .fail => return error.UlidClockBackwards,
-                .clamp => break :blk try bump(last),
+                last.* = Ulid.init(ms, random.int(u80));
+                return last.*;
             }
-        } else Ulid.init(ms, random.int(u80));
-
-        // Only reached on success, so errors above leave g.last untouched.
-        g.last = result;
-        return result;
-    }
-
-    fn bump(last: Ulid) Error!Ulid {
-        const r, const overflow = @addWithOverflow(last.randomness(), 1);
-        if (overflow != 0) return error.UlidMonotonicOverflow;
-        return Ulid.init(last.timestamp(), r);
+            if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
+            // Same ms, or a clamped backwards clock: increment the random part.
+            const r, const overflow = @addWithOverflow(std.mem.readInt(u80, last.bytes[6..16], .big), 1);
+            if (overflow != 0) return error.UlidMonotonicOverflow;
+            std.mem.writeInt(u80, last.bytes[6..16], r, .big);
+            return last.*;
+        }
+        g.last = Ulid.init(ms, random.int(u80));
+        return g.last.?;
     }
 };
