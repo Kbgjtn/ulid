@@ -217,4 +217,5 @@ test {
     _ = @import("tests/encode.zig");
     _ = @import("tests/decode.zig");
     _ = @import("tests/generator.zig");
+    _ = @import("tests/vectors.zig");
 }
