@@ -133,6 +133,33 @@ fn fuzzGenerator(_: void, smith: *Smith) anyerror!void {
     }
 }
 
+fn fuzzUuid(_: void, smith: *Smith) anyerror!void {
+    var raw: [16]u8 = undefined;
+    smith.bytes(&raw);
+
+    // Any ULID converts, keeps every bit outside version and variant, and
+    // converts back to the same UUID.
+    const u: Ulid = .{ .bytes = raw };
+    const v = u.toUuidV7();
+    try testing.expectEqual(@as(u8, 0x7), v[6] >> 4);
+    try testing.expectEqual(@as(u8, 0b10), v[8] >> 6);
+    const keep: u128 = ~((@as(u128, 0xF) << 76) | (@as(u128, 0b11) << 62));
+    try testing.expectEqual(
+        std.mem.readInt(u128, &raw, .big) & keep,
+        std.mem.readInt(u128, &v, .big) & keep,
+    );
+    const back = try Ulid.fromUuidV7(v);
+    try testing.expectEqual(v, back.bytes);
+    try testing.expectEqual(u.timestamp(), back.timestamp());
+
+    // Raw bytes are accepted exactly when they carry v7's version and variant.
+    const is_v7 = raw[6] >> 4 == 0x7 and raw[8] >> 6 == 0b10;
+    if (Ulid.fromUuidV7(raw)) |w| {
+        try testing.expect(is_v7);
+        try testing.expectEqual(raw, w.bytes);
+    } else |_| try testing.expect(!is_v7);
+}
+
 test "fuzz decode against a reference decoder" {
     try testing.fuzz({}, fuzzDecode, .{ .corpus = &.{
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -149,4 +176,8 @@ test "fuzz encode round trip" {
 
 test "fuzz generator stays monotonic" {
     try testing.fuzz({}, fuzzGenerator, .{});
+}
+
+test "fuzz UUIDv7 conversion" {
+    try testing.fuzz({}, fuzzUuid, .{});
 }
