@@ -60,6 +60,65 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
 
+    // `zig build bench` times the codec and the generator. It builds in
+    // ReleaseFast unless -Dbench-optimize says otherwise, whatever
+    // -Doptimize is. With -Dcompare it also runs the rival libraries that
+    // bench/fetch-rivals.sh clones into bench/vendor. None of bench/ is in
+    // the package paths, so consumers never fetch it.
+    const bench_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "bench-optimize",
+        "Optimize mode for the bench step (default: ReleaseFast)",
+    ) orelse .ReleaseFast;
+    const compare = b.option(
+        bool,
+        "compare",
+        "Also bench the rival libraries in bench/vendor",
+    ) orelse false;
+
+    const bench_ulid = b.createModule(.{
+        .root_source_file = b.path("src/Ulid.zig"),
+        .target = target,
+        .optimize = bench_optimize,
+    });
+    const rivals = b.createModule(.{
+        .root_source_file = b.path(if (compare) "bench/rivals.zig" else "bench/no_rivals.zig"),
+        .target = target,
+        .optimize = bench_optimize,
+        .imports = &.{.{ .name = "ulid", .module = bench_ulid }},
+    });
+    if (compare) {
+        const vendored = [_]struct { []const u8, []const u8 }{
+            .{ "hendrik", "bench/vendor/hendriknielaender-ulid.zig/src/ulid.zig" },
+            .{ "jkoop", "bench/vendor/jkoop-ulid-zig/src/root.zig" },
+            .{ "leroycep", "bench/vendor/leroycep-zig-ulid/ulid.zig" },
+        };
+        for (vendored) |v| {
+            const name, const path = v;
+            rivals.addImport(name, b.createModule(.{
+                .root_source_file = b.path(path),
+                .target = target,
+                .optimize = bench_optimize,
+            }));
+        }
+    }
+
+    const bench_exe = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/main.zig"),
+            .target = target,
+            .optimize = bench_optimize,
+            .imports = &.{
+                .{ .name = "ulid", .module = bench_ulid },
+                .{ .name = "rivals", .module = rivals },
+            },
+        }),
+    });
+    const run_bench = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run the benchmark");
+    bench_step.dependOn(&run_bench.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
