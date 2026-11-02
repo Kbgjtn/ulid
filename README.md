@@ -127,6 +127,28 @@ A ULID and a UUIDv7 share their layout: a 48-bit big-endian millisecond timestam
 
 `Generator` has no lock on purpose, so single-threaded code pays nothing for one. To share a generator between threads, guard it with a `std.Io.Mutex`. For independent IDs, give each thread its own generator.
 
+## Performance
+
+Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0, ReleaseFast, on a Ryzen 3 3300X pinned to 4 cores, taking the middle of three runs.
+
+| Case | ulid (this) | [hendriknielaender](https://github.com/hendriknielaender/ulid.zig) | [jkoop](https://github.com/jkoop/ulid-zig) | [leroycep](https://github.com/leroycep/zig-ulid) |
+|---|---|---|---|---|
+| encode | 6.8 | 8.5 | 6.8 | 9.3 |
+| decode | 12.5 | 12.8 | 196 | 35 |
+| `next`, same ms | 7.2 | 5.3 | | |
+| `next`, new ms, `Io.random` | 26.2 | 23.5 | | |
+
+Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is still behind hendriknielaender's.
+
+A SWAR decode was tried and dropped because it ran slower (13.4 to 16.8 ns). The 26 table lookups dominate decode time, not the shifts that combine the digits.
+
+To reproduce, fetch the other libraries and run the bench:
+
+```sh
+bench/fetch-rivals.sh
+zig build bench -Dcompare
+```
+
 ## Testing
 
 | Command | Runs |
