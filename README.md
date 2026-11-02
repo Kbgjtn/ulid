@@ -42,12 +42,9 @@ Generate a ULID from the system clock and print it in both cases:
 ```zig
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    // Io.random is a thread-safe CSPRNG.
-    const source: std.Random.IoSource = .{ .io = io };
 
     var gen: Ulid.Generator = .{};
-    const ms: u48 = @intCast(std.Io.Clock.real.now(io).toMilliseconds());
-    const id = try gen.next(ms, source.interface());
+    const id = try gen.nextNow(io);
 
     var buf: [64]u8 = undefined;
     var stdout: std.Io.File.Writer = .init(.stdout(), io, &buf);
@@ -56,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-`Clock.real` is Unix time, so the cast to `u48` holds until the year 10889 and fails only for a clock set before 1970.
+`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. To pick the clock or RNG yourself, call `next(ms, random)` instead.
 
 In tests, pass a fixed time and a seeded generator:
 
@@ -126,9 +123,9 @@ A ULID and a UUIDv7 share their layout: a 48-bit big-endian millisecond timestam
 - `toUuidV7` sets those 6 bits, overwriting 6 random bits, so converting back gives a different ULID with the same timestamp. IDs from different milliseconds keep their order.
 - `"{f}"` with `fmtUuid` prints the lowercase `8-4-4-4-12` form, such as `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`.
 
-## Not supported yet
+## Thread safety
 
-A thread-safe generator.
+`Generator` has no lock on purpose, so single-threaded code pays nothing for one. To share a generator between threads, guard it with a `std.Io.Mutex`. For independent IDs, give each thread its own generator.
 
 ## Testing
 

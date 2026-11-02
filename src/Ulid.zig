@@ -327,4 +327,19 @@ pub const Generator = struct {
         g.last = Ulid.init(ms, random.int(u80));
         return g.last.?;
     }
+
+    /// Like `next`, but reads the time and randomness from `io`.
+    ///
+    /// The timestamp is the wall clock (`Io.Clock.real`) in milliseconds,
+    /// clamped to the 48-bit range. Randomness comes from `io.random`,
+    /// which is seeded from secure entropy but falls back to a weaker
+    /// source if that is unavailable, and is only drawn when the
+    /// millisecond changes. Tests that need fixed output should call
+    /// `next` with their own clock and RNG.
+    pub fn nextNow(g: *Generator, io: Io) Error!Ulid {
+        const ms_i = Io.Clock.real.now(io).toMilliseconds();
+        const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
+        const source: std.Random.IoSource = .{ .io = io };
+        return g.next(ms, source.interface());
+    }
 };
