@@ -103,3 +103,39 @@ test "10k ids with a jittery clock are strictly increasing" {
         prev = u;
     }
 }
+
+fn nowMs(io: std.Io) i64 {
+    const ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+    return @intCast(@divFloor(ns, std.time.ns_per_ms));
+}
+
+test "nextNow uses the wall clock" {
+    const io = testing.io;
+    var g: Generator = .{};
+    const before = nowMs(io);
+    const u = try g.nextNow(io);
+    const after = nowMs(io);
+    const ts: i64 = u.timestamp();
+    try testing.expect(ts >= before and ts <= after);
+}
+
+test "nextNow burst is strictly increasing" {
+    const io = testing.io;
+    var g: Generator = .{};
+    var prev = try g.nextNow(io);
+    for (0..10_000) |_| {
+        const u = try g.nextNow(io);
+        try testing.expectEqual(std.math.Order.lt, prev.order(u));
+        prev = u;
+    }
+}
+
+test "nextNow then next on the same ms increments" {
+    const io = testing.io;
+    var g: Generator = .{};
+    var prng: std.Random.DefaultPrng = .init(1);
+    const a = try g.nextNow(io);
+    const b = try g.next(a.timestamp(), prng.random());
+    try testing.expectEqual(a.timestamp(), b.timestamp());
+    try testing.expectEqual(std.math.Order.lt, a.order(b));
+}
