@@ -122,6 +122,7 @@ A ULID and a UUIDv7 share their layout: a 48-bit big-endian millisecond timestam
 - `fromUuidV7` keeps all 128 bits. It returns `error.UuidNotV7` unless the version is 7 and the variant is RFC 9562's `0b10`.
 - `toUuidV7` sets those 6 bits, overwriting 6 random bits, so converting back gives a different ULID with the same timestamp. IDs from different milliseconds keep their order.
 - `"{f}"` with `fmtUuid` prints the lowercase `8-4-4-4-12` form, such as `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`.
+- `parseUuidV7` reads that form back. Hex may be either case. A bad length, hyphen, or hex digit fails before the version and variant check.
 
 ## Thread safety
 

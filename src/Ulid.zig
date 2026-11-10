@@ -206,6 +206,40 @@ pub fn fromUuidV7(bytes: [16]u8) error{UuidNotV7}!Ulid {
     return .{ .bytes = bytes };
 }
 
+/// Parses the `8-4-4-4-12` text form of a UUIDv7. Hex may be either case.
+/// Hyphens are required at indexes 8, 13, 18, and 23. A `urn:uuid:` prefix
+/// and surrounding braces are rejected.
+///
+/// The length is checked first. A bad hyphen or hex digit is
+/// `error.UuidInvalidCharacter`, from the left. Version and variant are
+/// checked only after the text is well formed, inside `fromUuidV7`.
+/// No allocation. Works at comptime.
+pub fn parseUuidV7(text: []const u8) error{ UuidInvalidLength, UuidInvalidCharacter, UuidNotV7 }!Ulid {
+    if (text.len != 36) return error.UuidInvalidLength;
+    var bytes: [16]u8 = undefined;
+    var i: usize = 0;
+    for (&bytes, 0..) |*byte, n| {
+        if (n == 4 or n == 6 or n == 8 or n == 10) {
+            if (text[i] != '-') return error.UuidInvalidCharacter;
+            i += 1;
+        }
+        const hi = hexDigit(text[i]) orelse return error.UuidInvalidCharacter;
+        const lo = hexDigit(text[i + 1]) orelse return error.UuidInvalidCharacter;
+        byte.* = (@as(u8, hi) << 4) | lo;
+        i += 2;
+    }
+    return fromUuidV7(bytes);
+}
+
+fn hexDigit(c: u8) ?u4 {
+    return switch (c) {
+        '0'...'9' => @intCast(c - '0'),
+        'a'...'f' => @intCast(c - 'a' + 10),
+        'A'...'F' => @intCast(c - 'A' + 10),
+        else => null,
+    };
+}
+
 /// Writes `u` as a UUIDv7 in the lowercase `8-4-4-4-12` hex form, after
 /// the same conversion as `toUuidV7`. See `fmtUuid`.
 pub fn formatUuid(u: Ulid, w: *Io.Writer) Io.Writer.Error!void {
