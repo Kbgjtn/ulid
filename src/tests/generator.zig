@@ -148,3 +148,84 @@ test "nextNow then next on the same ms increments" {
     try testing.expectEqual(a.timestamp(), b.timestamp());
     try testing.expectEqual(std.math.Order.lt, a.order(b));
 }
+
+const SecureScript = struct {
+    ms: i64,
+    bytes: [10]u8 = @splat(0),
+    calls: u32 = 0,
+    fail: bool = false,
+
+    fn io(self: *SecureScript) std.Io {
+        const storage = struct {
+            var vtable: std.Io.VTable = undefined;
+            var ready = false;
+        };
+        if (!storage.ready) {
+            storage.vtable = testing.io.vtable.*;
+            storage.vtable.now = scriptNow;
+            storage.vtable.randomSecure = scriptSecure;
+            storage.ready = true;
+        }
+        return .{ .userdata = self, .vtable = &storage.vtable };
+    }
+};
+
+fn scriptNow(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+    const self: *SecureScript = @ptrCast(@alignCast(userdata));
+    return .{ .nanoseconds = @as(i96, self.ms) * std.time.ns_per_ms };
+}
+
+fn scriptSecure(userdata: ?*anyopaque, buffer: []u8) std.Io.RandomSecureError!void {
+    const self: *SecureScript = @ptrCast(@alignCast(userdata));
+    if (self.fail) return error.EntropyUnavailable;
+    self.calls += 1;
+    @memcpy(buffer, &self.bytes);
+}
+
+const secure_bytes = [10]u8{ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a };
+
+test "nextNowSecure fails closed when entropy is unavailable" {
+    var script: SecureScript = .{ .ms = t0, .fail = true };
+    var g: Generator = .{};
+    try testing.expectError(error.EntropyUnavailable, g.nextNowSecure(script.io()));
+    try testing.expectEqual(null, g.last);
+    try testing.expectEqual(0, script.calls);
+}
+
+test "nextNowSecure does not draw again in the same millisecond" {
+    var script: SecureScript = .{ .ms = t0, .bytes = secure_bytes };
+    var g: Generator = .{};
+    const a = try g.nextNowSecure(script.io());
+    script.fail = true;
+    const b = try g.nextNowSecure(script.io());
+    try testing.expectEqual(a.timestamp(), b.timestamp());
+    try testing.expectEqual(a.randomness() + 1, b.randomness());
+    try testing.expectEqual(1, script.calls);
+    try testing.expectEqual(std.mem.readInt(u80, &secure_bytes, .little), a.randomness());
+}
+
+test "nextNowSecure draws again on a later millisecond" {
+    var script: SecureScript = .{ .ms = t0, .bytes = secure_bytes };
+    var g: Generator = .{};
+    _ = try g.nextNowSecure(script.io());
+
+    const later: i64 = t0 + 5;
+    const later_bytes = [10]u8{ 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01 };
+    script.ms = later;
+    script.bytes = later_bytes;
+    const u = try g.nextNowSecure(script.io());
+    try testing.expectEqual(@as(u48, @intCast(later)), u.timestamp());
+    try testing.expectEqual(std.mem.readInt(u80, &later_bytes, .little), u.randomness());
+    try testing.expectEqual(2, script.calls);
+}
+
+test "nextNowSecure does not draw when a backwards clock fails" {
+    var script: SecureScript = .{ .ms = t0, .bytes = secure_bytes };
+    var g: Generator = .{ .on_backwards = .fail };
+    const a = try g.nextNowSecure(script.io());
+    script.ms = t0 - 1;
+    script.fail = true;
+    try testing.expectError(error.UlidClockBackwards, g.nextNowSecure(script.io()));
+    try testing.expectEqual(a, g.last.?);
+    try testing.expectEqual(1, script.calls);
+}

@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. To pick the clock or RNG yourself, call `next(ms, random)` instead.
+`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. `nextNowSecure` draws from `io.randomSecure` instead, and returns `error.EntropyUnavailable` when the operating system cannot provide entropy. A call that stays in the same millisecond does not draw. To pick the clock or RNG yourself, call `next(ms, random)` instead.
 
 In tests, pass a fixed time and a seeded generator:
 

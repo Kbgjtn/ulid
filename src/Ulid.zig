@@ -362,4 +362,32 @@ pub const Generator = struct {
         const source: std.Random.IoSource = .{ .io = io };
         return g.next(ms, source.interface());
     }
+
+    /// Like `nextNow`, but draws a fresh random part from `io.randomSecure`.
+    ///
+    /// `randomSecure` is called only for the first id and when `ms` is later
+    /// than `last`. The same millisecond, and a backwards clock, use the
+    /// monotonic rules of `next` and do not draw. `error.EntropyUnavailable`
+    /// and `error.Canceled` leave `last` unchanged.
+    pub fn nextNowSecure(g: *Generator, io: Io) (Error || Io.RandomSecureError)!Ulid {
+        const ms_i = Io.Clock.real.now(io).toMilliseconds();
+        const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
+        const draw = if (g.last) |last| ms > last.timestamp() else true;
+        if (!draw) {
+            var marker: u8 = undefined;
+            return g.next(ms, .{ .ptr = &marker, .fillFn = refuseDraw });
+        }
+        var raw: [10]u8 = undefined;
+        try io.randomSecure(&raw);
+        return g.next(ms, .{ .ptr = &raw, .fillFn = fillDrawn });
+    }
 };
+
+fn fillDrawn(ptr: *anyopaque, dest: []u8) void {
+    const raw: *const [10]u8 = @ptrCast(@alignCast(ptr));
+    @memcpy(dest, raw);
+}
+
+fn refuseDraw(_: *anyopaque, _: []u8) void {
+    unreachable;
+}
