@@ -318,14 +318,34 @@ pub const Generator = struct {
                 return last.*;
             }
             if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
-            // Same ms, or a clamped backwards clock: increment the random part.
-            const r, const overflow = @addWithOverflow(std.mem.readInt(u80, last.bytes[6..16], .big), 1);
-            if (overflow != 0) return error.UlidMonotonicOverflow;
-            std.mem.writeInt(u80, last.bytes[6..16], r, .big);
+            // Same ms, or a clamped backwards clock. A full 0xFF part is
+            // left untouched.
+            if (!incrementRandom(last.bytes[6..16])) return error.UlidMonotonicOverflow;
             return last.*;
         }
         g.last = Ulid.init(ms, random.int(u80));
         return g.last.?;
+    }
+
+    /// Adds one to the 80-bit big-endian random part. Returns false, and
+    /// writes nothing, when every byte is already `0xFF`.
+    fn incrementRandom(random: *[10]u8) bool {
+        // The carried byte is the last one in all but 1 in 256 calls.
+        if (random[9] != 0xFF) {
+            random[9] += 1;
+            return true;
+        }
+        var i: usize = 9;
+        while (i > 0) {
+            i -= 1;
+            if (random[i] != 0xFF) {
+                random[i] += 1;
+                var j = i + 1;
+                while (j < random.len) : (j += 1) random[j] = 0;
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Like `next`, but reads the time and randomness from `io`.

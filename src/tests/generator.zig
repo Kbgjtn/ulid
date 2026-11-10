@@ -21,6 +21,15 @@ test "same millisecond increments randomness" {
     try testing.expectEqual(.lt, a.order(b));
 }
 
+test "same millisecond carries past a trailing 0xFF byte" {
+    var prng: std.Random.DefaultPrng = .init(1);
+    const almost: Ulid = .init(t0, 0xFF);
+    var g: Generator = .{ .last = almost };
+    const u = try g.next(t0, prng.random());
+    try testing.expectEqual(t0, u.timestamp());
+    try testing.expectEqual(@as(u80, 0x100), u.randomness());
+}
+
 test "monotonic overflow fails and keeps last" {
     var prng: std.Random.DefaultPrng = .init(2);
     const full: Ulid = .init(t0, maxInt(u80));

@@ -135,10 +135,10 @@ Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0
 |---|---|---|---|---|
 | encode | 6.8 | 8.5 | 6.8 | 9.3 |
 | decode | 12.5 | 12.8 | 196 | 35 |
-| `next`, same ms | 7.2 | 5.3 | | |
+| `next`, same ms | 5.0 | 5.5 | | |
 | `next`, new ms, `Io.random` | 26.2 | 23.5 | | |
 
-Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is still behind hendriknielaender's.
+Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is level with hendriknielaender too. That row was measured again on 10 Nov 2026 on the same machine, without pinning: 5.02 ns against 5.47 ns. The other rows are still the 2 Nov numbers.
 
 A SWAR decode was tried and dropped because it ran slower (13.4 to 16.8 ns). The 26 table lookups dominate decode time, not the shifts that combine the digits.
 
