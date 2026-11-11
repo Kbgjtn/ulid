@@ -30,6 +30,26 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
 
+    // `zig build example` runs examples/usecases.zig. The test step also
+    // compiles it, so the examples cannot fall behind the API. Nothing
+    // under examples/ is in the package paths.
+    const example_exe = b.addExecutable(.{
+        .name = "usecases",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/usecases.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "ulid", .module = b.createModule(.{
+                .root_source_file = b.path("src/Ulid.zig"),
+                .target = target,
+                .optimize = optimize,
+            }) }},
+        }),
+    });
+    test_step.dependOn(&example_exe.step);
+    const example_step = b.step("example", "Run examples/usecases.zig");
+    example_step.dependOn(&b.addRunArtifact(example_exe).step);
+
     // `zig build bench` times the codec and the generator. It builds in
     // ReleaseFast unless -Dbench-optimize says otherwise, whatever
     // -Doptimize is. With -Dcompare it also runs the rival libraries that
