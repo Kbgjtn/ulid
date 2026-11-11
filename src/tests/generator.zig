@@ -100,6 +100,37 @@ test "first call uses given time" {
     try testing.expectEqual(u, g.last.?);
 }
 
+// `nextNow` and `nextNowSecure` clamp the wall clock into 0 .. maxInt(u48)
+// before they call `next`, so these pin what a generator does at both ends.
+
+test "millisecond 0 is a valid timestamp and increments" {
+    var prng: std.Random.DefaultPrng = .init(10);
+    var g: Generator = .{};
+    const a = try g.next(0, prng.random());
+    try testing.expectEqual(@as(u48, 0), a.timestamp());
+    const b = try g.next(0, prng.random());
+    try testing.expectEqual(@as(u48, 0), b.timestamp());
+    try testing.expectEqual(a.randomness() + 1, b.randomness());
+}
+
+test "the last millisecond increments and keeps its timestamp" {
+    var prng: std.Random.DefaultPrng = .init(11);
+    var g: Generator = .{ .last = .init(maxInt(u48), 0) };
+    const u = try g.next(maxInt(u48), prng.random());
+    try testing.expectEqual(maxInt(u48), u.timestamp());
+    try testing.expectEqual(@as(u80, 1), u.randomness());
+}
+
+test "the last millisecond at max randomness overflows on every call" {
+    var prng: std.Random.DefaultPrng = .init(12);
+    const top: Ulid = .init(maxInt(u48), maxInt(u80));
+    var g: Generator = .{ .last = top };
+    for (0..2) |_| {
+        try testing.expectError(error.UlidMonotonicOverflow, g.next(maxInt(u48), prng.random()));
+        try testing.expectEqual(top, g.last.?);
+    }
+}
+
 test "seeded generator is repeatable" {
     var p1: std.Random.DefaultPrng = .init(8);
     var p2: std.Random.DefaultPrng = .init(8);
