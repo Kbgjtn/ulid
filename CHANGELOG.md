@@ -17,3 +17,19 @@
 ### Fixed
 
 - README: each fuzz test gets the full `--fuzz=N` limit.
+
+## 0.2.0 - 2026-11-02
+
+### Added
+
+- `Generator.nextNow` reads the wall clock and `io.random`.
+- UUIDv7 conversion: `toUuidV7`, `fromUuidV7` and `fmtUuid`.
+- `std.json` support: a `Ulid` reads and writes as its 26-character string.
+
+### Changed
+
+- Faster `decode` (13.9 to 12.6 ns) and same-millisecond `next` (8.7 to 7.5 ns).
+
+## 0.1.0 - 2026-10-31
+
+- First release: the `Ulid` type, strict Crockford base32 `encode` and `decode`, and a monotonic `Generator`.
