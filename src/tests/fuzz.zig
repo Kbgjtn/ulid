@@ -232,6 +232,57 @@ fn fuzzUuidText(_: void, smith: *Smith) anyerror!void {
     }
 }
 
+/// Printable ASCII other than '"' and '\\', biased towards the alphabet.
+const json_text_weights: []const Smith.Weight = &.{
+    .rangeAtMost(u8, 0x20, 0x21, 1),
+    .rangeAtMost(u8, 0x23, 0x5b, 1),
+    .rangeAtMost(u8, 0x5d, 0x7e, 1),
+    .rangeAtMost(u8, '0', '9', 8),
+    .rangeAtMost(u8, 'A', 'Z', 8),
+    .rangeAtMost(u8, 'a', 'z', 4),
+};
+
+fn fuzzJson(_: void, smith: *Smith) anyerror!void {
+    var text_buf: [40]u8 = undefined;
+    const len: usize = if (smith.boolWeighted(1, 7))
+        Ulid.encoded_len
+    else
+        smith.valueRangeAtMost(u8, 0, text_buf.len);
+    const text = text_buf[0..len];
+    smith.bytesWeighted(text, json_text_weights);
+
+    // The JSON string, with some characters written as \u00XX escapes.
+    var src_buf: [2 + 40 * 6]u8 = undefined;
+    var n: usize = 0;
+    src_buf[n] = '"';
+    n += 1;
+    for (text) |c| {
+        if (smith.boolWeighted(3, 1)) {
+            src_buf[n] = c;
+            n += 1;
+        } else {
+            _ = std.fmt.bufPrint(src_buf[n..][0..6], "\\u{x:0>4}", .{c}) catch unreachable;
+            n += 6;
+        }
+    }
+    src_buf[n] = '"';
+    n += 1;
+
+    // Any allocation fails the parse with OutOfMemory, which the
+    // comparison below reports.
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    const got = std.json.parseFromSliceLeaky(Ulid, failing.allocator(), src_buf[0..n], .{});
+    if (Ulid.decode(text, .{})) |want| {
+        try testing.expectEqual(want, try got);
+    } else |err| {
+        try testing.expectError(switch (err) {
+            error.UlidInvalidLength => error.LengthMismatch,
+            error.UlidInvalidCharacter => error.InvalidCharacter,
+            error.UlidOverflow => error.Overflow,
+        }, got);
+    }
+}
+
 test "fuzz decode against a reference decoder" {
     try testing.fuzz({}, fuzzDecode, .{ .corpus = &.{
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -261,5 +312,13 @@ test "fuzz UUIDv7 text parsing against a reference parser" {
         "017f22e2-79b0-4cc3-98c4-dc0c0c07398f",
         "017f22e2-79b0-7cc3-c8c4-dc0c0c07398f",
         "017f22e279b0-7cc3-98c4-dc0c0c07398f0",
+    } });
+}
+
+test "fuzz JSON parsing against decode" {
+    try testing.fuzz({}, fuzzJson, .{ .corpus = &.{
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "01arz3ndektsv4rrffq69g5fav",
+        "8ZZZZZZZZZZZZZZZZZZZZZZZZZ",
     } });
 }

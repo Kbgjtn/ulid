@@ -281,15 +281,36 @@ pub fn jsonStringify(u: Ulid, jws: anytype) !void {
 /// `std.json`'s own: `UlidInvalidLength` to `error.LengthMismatch`,
 /// `UlidInvalidCharacter` to `error.InvalidCharacter` and `UlidOverflow` to
 /// `error.Overflow`.
+///
+/// Allocates nothing: the string, escaped or split across reader buffers,
+/// is gathered into a 26-byte buffer on the stack. `allocator` is unused.
 pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Ulid {
-    const token = try source.nextAllocMax(allocator, .alloc_if_needed, options.max_value_len.?);
-    const s = switch (token) {
-        .string => |s| s,
-        .allocated_string => |s| s,
-        else => return error.UnexpectedToken,
-    };
-    defer if (token == .allocated_string) allocator.free(s);
-    return decode(s, .{}) catch |err| jsonError(err);
+    _ = allocator;
+    _ = options;
+    var buf: [encoded_len]u8 = undefined;
+    // The string's full length, which may pass `buf.len`.
+    var len: usize = 0;
+    while (true) {
+        const token = try source.next();
+        const piece: []const u8, const done = switch (token) {
+            .string => |s| .{ s, true },
+            .partial_string => |s| .{ s, false },
+            .partial_string_escaped_1 => |*b| .{ b, false },
+            .partial_string_escaped_2 => |*b| .{ b, false },
+            .partial_string_escaped_3 => |*b| .{ b, false },
+            .partial_string_escaped_4 => |*b| .{ b, false },
+            // Only the first token can be something else: the scanner ends
+            // a string it has started with `.string`.
+            else => return error.UnexpectedToken,
+        };
+        // Keep reading past 26 bytes, so the scanner still reports any
+        // syntax error later in the string, but stop copying.
+        if (len + piece.len <= buf.len) @memcpy(buf[len..][0..piece.len], piece);
+        len += piece.len;
+        if (done) break;
+    }
+    if (len != buf.len) return error.LengthMismatch;
+    return decode(&buf, .{}) catch |err| jsonError(err);
 }
 
 /// Reads a `Ulid` from a parsed `std.json.Value`, with the same rules and
