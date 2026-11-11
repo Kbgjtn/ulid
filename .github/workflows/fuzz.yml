@@ -1,12 +1,10 @@
 name: fuzz
 
-# Short runs on every push, a long run nightly. The four fuzz tests in
-# src/tests/fuzz.zig share one `zig build test` binary and one corpus
-# directory. Each test receives its own copy of the --fuzz limit. The
-# budget is wall time: a limited --fuzz run takes an
-# iteration count, and the suffixes are only K, M, and G. A killed run
-# would save its current input as a crash, so each chunk is allowed to
-# finish. The corpus in .zig-cache/f carries over between chunks.
+# Short runs on every push, a long run nightly. All four fuzz tests in
+# src/tests/fuzz.zig run in one `zig build test --fuzz` step, and the
+# run count is shared between them. The corpus is cached so each run
+# continues from the last. A crash fails the job and uploads the input
+# as an artifact.
 
 on:
   push:
@@ -15,18 +13,16 @@ on:
     - cron: "0 2 * * *" # 02:00 UTC
   workflow_dispatch:
     inputs:
-      minutes:
-        description: "Minutes to fuzz"
-        default: "60"
+      runs:
+        description: "Runs, shared by all fuzz tests"
+        default: "50000000"
 
 jobs:
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # 2 minutes on push, an hour nightly and on a manual run that leaves
-      # the input blank. The job limit is 90 so one last chunk still fits.
-      MINUTES: ${{ github.event_name == 'push' && '2' || inputs.minutes || '60' }}
+      RUNS: ${{ github.event_name == 'push' && '1000000' || inputs.runs || '50000000' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -39,42 +35,11 @@ jobs:
           key: fuzz-${{ github.run_id }}
           restore-keys: fuzz-
 
-      # The restored corpus may hold an older crash file. Drop it so an
-      # upload below is always this run's.
-      - name: Remove stale crash
-        run: rm -f .zig-cache/f/crash
-
-      # Build and replay seeds first, so a build error fails here and is
-      # not mistaken for a fuzzer crash. Without --fuzz, each fuzz test
-      # runs its corpus once.
-      - name: Build and replay
-        run: zig build test -Dllvm
-
-      # Chunks of about 3 minutes until the budget is used. Each chunk
-      # ends on its own. zig 0.16.0's build runner exits 0 when a limited
-      # --fuzz run finds a crash (it only prints "input saved"), so the
-      # crash file is what fails the step.
       - name: Fuzz
-        id: fuzz
-        run: |
-          deadline=$(( $(date +%s) + MINUTES * 60 ))
-          runs=100000
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            start=$(date +%s)
-            zig build test -Dllvm --fuzz=$runs
-            if [ -e .zig-cache/f/crash ]; then
-              echo "::error::fuzz found a crash; the input is in the crash artifact"
-              exit 1
-            fi
-            took=$(( $(date +%s) - start ))
-            [ "$took" -gt 0 ] || took=1
-            runs=$(( runs * 180 / took ))
-            [ "$runs" -ge 100000 ] || runs=100000
-            [ "$runs" -le 100000000 ] || runs=100000000
-          done
+        run: zig build test -Dllvm --fuzz=$RUNS
 
       - name: Upload crash
-        if: failure() && steps.fuzz.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: crash
