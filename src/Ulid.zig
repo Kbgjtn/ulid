@@ -75,6 +75,7 @@ pub fn formatLower(u: Ulid, w: *Io.Writer) Io.Writer.Error!void {
     try w.writeAll(&buf);
 }
 
+/// The errors from `decode`, in the order they are checked.
 pub const DecodeError = error{
     /// The text is not exactly `encoded_len` bytes long.
     UlidInvalidLength,
@@ -358,6 +359,8 @@ pub const Generator = struct {
     /// steps back keeps producing ordered IDs instead of errors.
     on_backwards: OnBackwards = .clamp,
 
+    /// The errors from `next` and `nextNow`. `nextNowSecure` adds
+    /// `Io.RandomSecureError`.
     pub const Error = error{
         /// The clock went backwards and `on_backwards` is `.fail`.
         UlidClockBackwards,
@@ -365,6 +368,7 @@ pub const Generator = struct {
         UlidMonotonicOverflow,
     };
 
+    /// The choices for `on_backwards`.
     pub const OnBackwards = enum {
         /// Return error.UlidClockBackwards.
         fail,

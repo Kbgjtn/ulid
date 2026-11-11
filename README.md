@@ -155,7 +155,7 @@ zig build bench -Dcompare
 | Command | Runs |
 |---|---|
 | `zig build test` | Encode, decode, generator, UUIDv7, JSON and comptime tests, the oklog vectors, and one pass of each fuzz test |
-| `zig build test -Dllvm --fuzz=1M` | The fuzz tests for a million runs, shared between them (LLVM is needed for coverage) |
+| `zig build test -Dllvm --fuzz=1M` | The fuzz tests for a million runs each (LLVM is needed for coverage) |
 
 CI (`.github/workflows/`) runs fmt, build and test in Debug and ReleaseSafe on every push, plus a short fuzz run per push and a long one nightly.
 

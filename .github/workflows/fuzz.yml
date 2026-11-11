@@ -1,8 +1,9 @@
 name: fuzz
 
-# Short runs on every push, a long run nightly. All four fuzz tests in
-# src/tests/fuzz.zig run in one `zig build test --fuzz` step, and the
-# run count is shared between them. The corpus is cached so each run
+# Short runs on every push, a long run nightly. The six fuzz tests in
+# src/tests/fuzz.zig run in one `zig build test --fuzz` step, and each
+# test gets the whole run count, so a push runs six million inputs in
+# all. The corpus is cached so each run
 # continues from the last. A crash fails the job and uploads the input
 # as an artifact.
 #
@@ -18,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: "Runs, shared by all fuzz tests"
+        description: "Runs for each fuzz test"
         default: "50000000"
 
 jobs:
