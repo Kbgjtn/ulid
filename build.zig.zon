@@ -1,6 +1,6 @@
 .{
     .name = .ulid,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .fingerprint = 0xc288c859d3665af9, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
@@ -10,5 +10,6 @@
         "src/Ulid.zig",
         "LICENSE",
         "README.md",
+        "CHANGELOG.md",
     },
 }

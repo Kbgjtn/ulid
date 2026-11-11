@@ -11,7 +11,7 @@ Requires Zig 0.16.0. MIT licensed.
 - **No allocation.** `encode` writes into a `*[26]u8` and `decode` returns the value. Both work at comptime.
 - **Monotonic generator.** Within one millisecond the random part is incremented by one. Running out of random values is an error that leaves the generator usable. The time and the `std.Random` are arguments, so tests can fix both.
 - **Formatting.** `"{f}"` prints the canonical uppercase form and `fmtLower` the lowercase one.
-- **UUIDv7 conversion.** `toUuidV7`, `fromUuidV7` and `fmtUuid` convert to and from RFC 9562 UUIDv7.
+- **UUIDv7 conversion.** `toUuidV7`, `fromUuidV7` and `fmtUuid` convert to and from RFC 9562 UUIDv7, and `parseUuidV7` reads its text form.
 - **JSON.** `std.json` reads and writes a `Ulid` as its 26-character string. Parsing uses the default decoding rules, and errors map to `std.json`'s `LengthMismatch`, `InvalidCharacter` and `Overflow`.
 - **Reference vectors.** 190 values generated with Go's [oklog/ulid](https://github.com/oklog/ulid) v2 are checked in both directions.
 
@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. To pick the clock or RNG yourself, call `next(ms, random)` instead.
+`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. `nextNowSecure` draws from `io.randomSecure` instead, and returns `error.EntropyUnavailable` when the operating system cannot provide entropy. A call that stays in the same millisecond does not draw. To pick the clock or RNG yourself, call `next(ms, random)` instead. `io.random` is a ChaCha generator per thread, so each new millisecond costs about 15 ns of randomness. Where IDs need not be unguessable, a seeded `std.Random.DefaultPrng` passed to `next` is faster, but its output can be predicted from earlier IDs.
 
 In tests, pass a fixed time and a seeded generator:
 
@@ -122,6 +122,7 @@ A ULID and a UUIDv7 share their layout: a 48-bit big-endian millisecond timestam
 - `fromUuidV7` keeps all 128 bits. It returns `error.UuidNotV7` unless the version is 7 and the variant is RFC 9562's `0b10`.
 - `toUuidV7` sets those 6 bits, overwriting 6 random bits, so converting back gives a different ULID with the same timestamp. IDs from different milliseconds keep their order.
 - `"{f}"` with `fmtUuid` prints the lowercase `8-4-4-4-12` form, such as `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`.
+- `parseUuidV7` reads that form back. Hex may be either case. A bad length, hyphen, or hex digit fails before the version and variant check. Its errors are `UuidParseError`, and `fromUuidV7`'s are `UuidError`.
 
 ## Thread safety
 
@@ -135,10 +136,10 @@ Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0
 |---|---|---|---|---|
 | encode | 6.8 | 8.5 | 6.8 | 9.3 |
 | decode | 12.5 | 12.8 | 196 | 35 |
-| `next`, same ms | 7.2 | 5.3 | | |
-| `next`, new ms, `Io.random` | 26.2 | 23.5 | | |
+| `next`, same ms | 5.0 | 5.5 | | |
+| `next`, new ms, `Io.random` | 25.4 | 23.2 | | |
 
-Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is still behind hendriknielaender's.
+Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is level with hendriknielaender too. That row was measured again on 10 Nov 2026 on the same machine, without pinning: 5.02 ns against 5.47 ns. The new-millisecond row was measured on 11 Nov 2026 pinned to one core, taking the middle of three runs; hendriknielaender's is still about 2 ns faster there. The other rows are still the 2 Nov numbers.
 
 A SWAR decode was tried and dropped because it ran slower (13.4 to 16.8 ns). The 26 table lookups dominate decode time, not the shifts that combine the digits.
 
@@ -154,7 +155,7 @@ zig build bench -Dcompare
 | Command | Runs |
 |---|---|
 | `zig build test` | Encode, decode, generator, UUIDv7, JSON and comptime tests, the oklog vectors, and one pass of each fuzz test |
-| `zig build test -Dllvm --fuzz=1M` | The fuzz tests for a million runs, shared between them (LLVM is needed for coverage) |
+| `zig build test -Dllvm --fuzz=1M` | The fuzz tests for a million runs each (LLVM is needed for coverage) |
 
 CI (`.github/workflows/`) runs fmt, build and test in Debug and ReleaseSafe on every push, plus a short fuzz run per push and a long one nightly.
 

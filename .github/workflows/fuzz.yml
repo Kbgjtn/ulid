@@ -1,10 +1,16 @@
 name: fuzz
 
-# Short runs on every push, a long run nightly. All four fuzz tests in
-# src/tests/fuzz.zig run in one `zig build test --fuzz` step, and the
-# run count is shared between them. The corpus is cached so each run
-# continues from the last. A crash fails the job and uploads the input
-# as an artifact.
+# Short runs on every push, a long run nightly. The six fuzz tests in
+# src/tests/fuzz.zig run in one `zig build test --fuzz` step, and each
+# test gets the whole run count, so a push runs six million inputs in
+# all, and the nightly run 60 million, which fits the 90-minute job
+# limit at about 11,000 inputs a second. The corpus is cached so each
+# run continues from the last. A crash fails the job and uploads the
+# input as an artifact.
+#
+# The corpus lives under one cache key. A cache entry cannot be
+# overwritten, so a run that succeeds deletes this branch's entry and
+# saves a new one. A failed run keeps the old entry.
 
 on:
   push:
@@ -14,25 +20,35 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: "Runs, shared by all fuzz tests"
-        default: "50000000"
+        description: "Runs for each fuzz test"
+        default: "10000000"
 
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    # One run per branch at a time, so two runs cannot both delete the
+    # corpus entry and race to save it. A queued run waits, not cancels.
+    concurrency:
+      group: fuzz-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write # to delete the old corpus cache entry
     env:
-      RUNS: ${{ github.event_name == 'push' && '1000000' || inputs.runs || '50000000' }}
+      CORPUS_KEY: fuzz-corpus-v1
+      RUNS: ${{ github.event_name == 'push' && '1000000' || inputs.runs || '10000000' }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: mlugg/setup-zig@v2.2.1
 
+      # restore-keys still picks up a corpus saved under an older key.
       - name: Restore corpus
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: .zig-cache/f
-          key: fuzz-${{ github.run_id }}
+          key: ${{ env.CORPUS_KEY }}
           restore-keys: fuzz-
 
       - name: Fuzz
@@ -45,3 +61,19 @@ jobs:
           name: crash
           path: .zig-cache/f/crash
           if-no-files-found: ignore
+
+      # Only this branch's entry: other branches keep theirs.
+      - name: Delete old corpus cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CORPUS_KEY" --json id --jq '.[].id')
+          for id in $ids; do
+            gh cache delete "$id" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: Save corpus
+        uses: actions/cache/save@v6
+        with:
+          path: .zig-cache/f
+          key: ${{ env.CORPUS_KEY }}

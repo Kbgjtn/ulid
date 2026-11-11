@@ -90,3 +90,53 @@ test "UUIDv7 conversion works at comptime" {
     const u = comptime Ulid.fromUuidV7(rfc_bytes) catch unreachable;
     try testing.expectEqual(@as(u48, 1645557742000), u.timestamp());
 }
+
+const rfc_text_upper = "017F22E2-79B0-7CC3-98C4-DC0C0C07398F";
+
+test "parseUuidV7 round-trips the RFC 9562 example" {
+    const u = try Ulid.parseUuidV7(rfc_text);
+    try testing.expectEqual(try Ulid.fromUuidV7(rfc_bytes), u);
+    try testing.expectEqual(u, try Ulid.parseUuidV7(rfc_text_upper));
+    const parsed = comptime Ulid.parseUuidV7(rfc_text) catch unreachable;
+    try testing.expectEqual(rfc_bytes, parsed.bytes);
+}
+
+test "parseUuidV7 rejects a bad length, hyphen, digit, version, or variant" {
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("017f22e2"));
+
+    var missing_hyphen: [36]u8 = rfc_text.*;
+    missing_hyphen[8] = 'a';
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7(&missing_hyphen));
+
+    var bad_digit: [36]u8 = rfc_text.*;
+    bad_digit[0] = 'g';
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7(&bad_digit));
+
+    var bad_version: [36]u8 = rfc_text.*;
+    bad_version[14] = '4';
+    try testing.expectError(error.UuidNotV7, Ulid.parseUuidV7(&bad_version));
+
+    var bad_variant: [36]u8 = rfc_text.*;
+    bad_variant[19] = 'c';
+    try testing.expectError(error.UuidNotV7, Ulid.parseUuidV7(&bad_variant));
+}
+
+test "parseUuidV7 reports length, then character, then version" {
+    // Too long, with a bad character and version 4: the length wins.
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("g17f22e2-79b0-4cc3-98c4-dc0c0c07398f0"));
+    // Version 4 and a bad last digit: the character wins, wherever it is.
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7("017f22e2-79b0-4cc3-98c4-dc0c0c07398g"));
+    // Variant 0b11 and a hyphen moved one place to the right.
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7("017f22e2-79b0-7cc3-c8c4d-c0c0c07398f"));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7(""));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("urn:uuid:017f22e2-79b0-7cc3-98c4-dc0c0c07398f"));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("{017f22e2-79b0-7cc3-98c4-dc0c0c07398f}"));
+}
+
+test "the UUIDv7 functions return the named error sets" {
+    const from = @typeInfo(@typeInfo(@TypeOf(Ulid.fromUuidV7)).@"fn".return_type.?).error_union.error_set;
+    const parse = @typeInfo(@typeInfo(@TypeOf(Ulid.parseUuidV7)).@"fn".return_type.?).error_union.error_set;
+    try testing.expect(from == Ulid.UuidError);
+    try testing.expect(parse == Ulid.UuidParseError);
+    try testing.expect(Ulid.UuidParseError == error{ UuidInvalidLength, UuidInvalidCharacter, UuidNotV7 });
+}

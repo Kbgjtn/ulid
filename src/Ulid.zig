@@ -75,6 +75,7 @@ pub fn formatLower(u: Ulid, w: *Io.Writer) Io.Writer.Error!void {
     try w.writeAll(&buf);
 }
 
+/// The errors from `decode`, in the order they are checked.
 pub const DecodeError = error{
     /// The text is not exactly `encoded_len` bytes long.
     UlidInvalidLength,
@@ -184,13 +185,29 @@ pub fn decode(text: []const u8, options: DecodeOptions) DecodeError!Ulid {
     return u;
 }
 
-/// Returns `ulid` as an RFC 9562 UUIDv7: the same 16 bytes with the version
+/// The error from `fromUuidV7`.
+pub const UuidError = error{
+    /// The version nibble is not 7, or the variant bits are not RFC 9562's
+    /// `0b10`.
+    UuidNotV7,
+};
+
+/// The errors from `parseUuidV7`, in the order they are checked.
+pub const UuidParseError = error{
+    /// The text is not exactly 36 bytes long.
+    UuidInvalidLength,
+    /// A hyphen is missing at index 8, 13, 18 or 23, or another byte is
+    /// not a hex digit.
+    UuidInvalidCharacter,
+} || UuidError;
+
+/// Returns `u` as an RFC 9562 UUIDv7: the same 16 bytes with the version
 /// nibble (byte 6, high 4 bits) set to 7 and the variant (byte 8, top 2
 /// bits) set to `0b10`. This overwrites 6 of the 80 random bits, so
 /// `fromUuidV7(u.toUuidV7())` is not `u` unless those bits already matched.
 /// The timestamp is unchanged.
-pub fn toUuidV7(ulid: Ulid) [16]u8 {
-    var b = ulid.bytes;
+pub fn toUuidV7(u: Ulid) [16]u8 {
+    var b = u.bytes;
     b[6] = (b[6] & 0x0F) | 0x70;
     b[8] = (b[8] & 0x3F) | 0x80;
     return b;
@@ -200,10 +217,44 @@ pub fn toUuidV7(ulid: Ulid) [16]u8 {
 /// timestamp first, so the bytes are copied unchanged and nothing is lost.
 /// Returns `error.UuidNotV7` unless the version is 7 and the variant is
 /// the RFC 9562 one (`0b10`).
-pub fn fromUuidV7(bytes: [16]u8) error{UuidNotV7}!Ulid {
+pub fn fromUuidV7(bytes: [16]u8) UuidError!Ulid {
     if (bytes[6] >> 4 != 0x07) return error.UuidNotV7;
     if (bytes[8] >> 6 != 0b10) return error.UuidNotV7;
     return .{ .bytes = bytes };
+}
+
+/// Parses the `8-4-4-4-12` text form of a UUIDv7. Hex may be either case.
+/// Hyphens are required at indexes 8, 13, 18, and 23. A `urn:uuid:` prefix
+/// and surrounding braces are rejected.
+///
+/// The length is checked first. A bad hyphen or hex digit is
+/// `error.UuidInvalidCharacter`, from the left. Version and variant are
+/// checked only after the text is well formed, inside `fromUuidV7`.
+/// No allocation. Works at comptime.
+pub fn parseUuidV7(text: []const u8) UuidParseError!Ulid {
+    if (text.len != 36) return error.UuidInvalidLength;
+    var bytes: [16]u8 = undefined;
+    var i: usize = 0;
+    for (&bytes, 0..) |*byte, n| {
+        if (n == 4 or n == 6 or n == 8 or n == 10) {
+            if (text[i] != '-') return error.UuidInvalidCharacter;
+            i += 1;
+        }
+        const hi = hexDigit(text[i]) orelse return error.UuidInvalidCharacter;
+        const lo = hexDigit(text[i + 1]) orelse return error.UuidInvalidCharacter;
+        byte.* = (@as(u8, hi) << 4) | lo;
+        i += 2;
+    }
+    return fromUuidV7(bytes);
+}
+
+fn hexDigit(c: u8) ?u4 {
+    return switch (c) {
+        '0'...'9' => @intCast(c - '0'),
+        'a'...'f' => @intCast(c - 'a' + 10),
+        'A'...'F' => @intCast(c - 'A' + 10),
+        else => null,
+    };
 }
 
 /// Writes `u` as a UUIDv7 in the lowercase `8-4-4-4-12` hex form, after
@@ -247,15 +298,36 @@ pub fn jsonStringify(u: Ulid, jws: anytype) !void {
 /// `std.json`'s own: `UlidInvalidLength` to `error.LengthMismatch`,
 /// `UlidInvalidCharacter` to `error.InvalidCharacter` and `UlidOverflow` to
 /// `error.Overflow`.
+///
+/// Allocates nothing: the string, escaped or split across reader buffers,
+/// is gathered into a 26-byte buffer on the stack. `allocator` is unused.
 pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Ulid {
-    const token = try source.nextAllocMax(allocator, .alloc_if_needed, options.max_value_len.?);
-    const s = switch (token) {
-        .string => |s| s,
-        .allocated_string => |s| s,
-        else => return error.UnexpectedToken,
-    };
-    defer if (token == .allocated_string) allocator.free(s);
-    return decode(s, .{}) catch |err| jsonError(err);
+    _ = allocator;
+    _ = options;
+    var buf: [encoded_len]u8 = undefined;
+    // The string's full length, which may pass `buf.len`.
+    var len: usize = 0;
+    while (true) {
+        const token = try source.next();
+        const piece: []const u8, const done = switch (token) {
+            .string => |s| .{ s, true },
+            .partial_string => |s| .{ s, false },
+            .partial_string_escaped_1 => |*b| .{ b, false },
+            .partial_string_escaped_2 => |*b| .{ b, false },
+            .partial_string_escaped_3 => |*b| .{ b, false },
+            .partial_string_escaped_4 => |*b| .{ b, false },
+            // Only the first token can be something else: the scanner ends
+            // a string it has started with `.string`.
+            else => return error.UnexpectedToken,
+        };
+        // Keep reading past 26 bytes, so the scanner still reports any
+        // syntax error later in the string, but stop copying.
+        if (len + piece.len <= buf.len) @memcpy(buf[len..][0..piece.len], piece);
+        len += piece.len;
+        if (done) break;
+    }
+    if (len != buf.len) return error.LengthMismatch;
+    return decode(&buf, .{}) catch |err| jsonError(err);
 }
 
 /// Reads a `Ulid` from a parsed `std.json.Value`, with the same rules and
@@ -287,6 +359,8 @@ pub const Generator = struct {
     /// steps back keeps producing ordered IDs instead of errors.
     on_backwards: OnBackwards = .clamp,
 
+    /// The errors from `next` and `nextNow`. `nextNowSecure` adds
+    /// `Io.RandomSecureError`.
     pub const Error = error{
         /// The clock went backwards and `on_backwards` is `.fail`.
         UlidClockBackwards,
@@ -294,6 +368,7 @@ pub const Generator = struct {
         UlidMonotonicOverflow,
     };
 
+    /// The choices for `on_backwards`.
     pub const OnBackwards = enum {
         /// Return error.UlidClockBackwards.
         fail,
@@ -304,28 +379,64 @@ pub const Generator = struct {
     /// Returns a ULID greater than every earlier one from this generator.
     ///
     /// A timestamp `ms` later than the last one draws a fresh random part
-    /// from `random`. The same timestamp increments the last random part
-    /// by one, and returns `error.UlidMonotonicOverflow` if it is already
-    /// at its maximum. An earlier `ms` is handled as `on_backwards` says.
+    /// from `random`: 10 bytes, stored in the order drawn. The same
+    /// timestamp increments the last random part by one, and returns
+    /// `error.UlidMonotonicOverflow` if it is already at its maximum. An
+    /// earlier `ms` is handled as `on_backwards` says.
     /// On error, `last` is unchanged.
     pub fn next(g: *Generator, ms: u48, random: std.Random) Error!Ulid {
-        // Update last in place, so the same-ms path touches only the
-        // random bytes instead of copying the whole optional out and back.
-        if (g.last) |*last| {
-            const last_ts = std.mem.readInt(u48, last.bytes[0..6], .big);
-            if (ms > last_ts) {
-                last.* = Ulid.init(ms, random.int(u80));
-                return last.*;
-            }
-            if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
-            // Same ms, or a clamped backwards clock: increment the random part.
-            const r, const overflow = @addWithOverflow(std.mem.readInt(u80, last.bytes[6..16], .big), 1);
-            if (overflow != 0) return error.UlidMonotonicOverflow;
-            std.mem.writeInt(u80, last.bytes[6..16], r, .big);
-            return last.*;
+        if (try g.advance(ms)) |u| return u;
+        // Write the new id into last in place. The drawn bytes are stored
+        // as drawn, with no integer in between.
+        g.last = @as(Ulid, undefined);
+        const last = &g.last.?;
+        std.mem.writeInt(u48, last.bytes[0..6], ms, .big);
+        random.bytes(last.bytes[6..16]);
+        return last.*;
+    }
+
+    /// The part of `next` that needs no randomness. Returns null when
+    /// `ms` calls for a fresh random part: there is no last id, or `ms` is
+    /// later than its timestamp. Otherwise increments `last` in place and
+    /// returns it, or fails and leaves it unchanged.
+    fn advance(g: *Generator, ms: u48) Error!?Ulid {
+        const last = if (g.last) |*l| l else return null;
+        const last_ts = std.mem.readInt(u48, last.bytes[0..6], .big);
+        if (ms > last_ts) return null;
+        if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
+        // Same ms, or a clamped backwards clock. A full 0xFF part is
+        // left untouched.
+        if (!incrementRandom(last.bytes[6..16])) return error.UlidMonotonicOverflow;
+        return last.*;
+    }
+
+    /// Adds one to the 80-bit big-endian random part. Returns false, and
+    /// writes nothing, when every byte is already `0xFF`.
+    fn incrementRandom(part: *[10]u8) bool {
+        // The carried byte is the last one in all but 1 in 256 calls.
+        if (part[9] != 0xFF) {
+            part[9] += 1;
+            return true;
         }
-        g.last = Ulid.init(ms, random.int(u80));
-        return g.last.?;
+        var i: usize = 9;
+        while (i > 0) {
+            i -= 1;
+            if (part[i] != 0xFF) {
+                part[i] += 1;
+                var j = i + 1;
+                while (j < part.len) : (j += 1) part[j] = 0;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The wall clock (`Io.Clock.real`) in milliseconds, clamped to the
+    /// 48-bit range: a time before 1970 is 0, and one past the year 10889
+    /// is `maxInt(u48)`.
+    fn nowMs(io: Io) u48 {
+        const ms = Io.Clock.real.now(io).toMilliseconds();
+        return @intCast(std.math.clamp(ms, 0, std.math.maxInt(u48)));
     }
 
     /// Like `next`, but reads the time and randomness from `io`.
@@ -334,12 +445,29 @@ pub const Generator = struct {
     /// clamped to the 48-bit range. Randomness comes from `io.random`,
     /// which is seeded from secure entropy but falls back to a weaker
     /// source if that is unavailable, and is only drawn when the
-    /// millisecond changes. Tests that need fixed output should call
-    /// `next` with their own clock and RNG.
+    /// millisecond changes. `nextNowSecure` refuses that fallback. Tests
+    /// that need fixed output should call `next` with their own clock and
+    /// RNG.
     pub fn nextNow(g: *Generator, io: Io) Error!Ulid {
-        const ms_i = Io.Clock.real.now(io).toMilliseconds();
-        const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
+        const ms = nowMs(io);
         const source: std.Random.IoSource = .{ .io = io };
         return g.next(ms, source.interface());
+    }
+
+    /// Like `nextNow`, but draws a fresh random part from `io.randomSecure`.
+    ///
+    /// `randomSecure` is called only for the first id and when `ms` is later
+    /// than `last`. The same millisecond, and a backwards clock, use the
+    /// monotonic rules of `next` and do not draw. `error.EntropyUnavailable`
+    /// and `error.Canceled` leave `last` unchanged.
+    pub fn nextNowSecure(g: *Generator, io: Io) (Error || Io.RandomSecureError)!Ulid {
+        const ms = nowMs(io);
+        if (try g.advance(ms)) |u| return u;
+        // Draw into a local, so a failed draw leaves last unchanged.
+        var u: Ulid = undefined;
+        std.mem.writeInt(u48, u.bytes[0..6], ms, .big);
+        try io.randomSecure(u.bytes[6..16]);
+        g.last = u;
+        return u;
     }
 };
