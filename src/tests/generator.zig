@@ -30,6 +30,22 @@ test "same millisecond carries past a trailing 0xFF byte" {
     try testing.expectEqual(@as(u80, 0x100), u.randomness());
 }
 
+test "same millisecond carries through every 0xFF byte" {
+    var prng: std.Random.DefaultPrng = .init(1);
+    // Two trailing 0xFF bytes: the carry stops at the third byte from the end.
+    var g: Generator = .{ .last = .init(t0, 0x12_FFFF) };
+    try testing.expectEqual(@as(u80, 0x13_0000), (try g.next(t0, prng.random())).randomness());
+    // Nine trailing 0xFF bytes: the carry reaches the first random byte.
+    g.last = .init(t0, maxInt(u72));
+    const top = try g.next(t0, prng.random());
+    try testing.expectEqual(@as(u80, 1) << 72, top.randomness());
+    try testing.expectEqual(t0, top.timestamp());
+    // One below the maximum still increments; the next call overflows.
+    g.last = .init(t0, maxInt(u80) - 1);
+    try testing.expectEqual(maxInt(u80), (try g.next(t0, prng.random())).randomness());
+    try testing.expectError(error.UlidMonotonicOverflow, g.next(t0, prng.random()));
+}
+
 test "monotonic overflow fails and keeps last" {
     var prng: std.Random.DefaultPrng = .init(2);
     const full: Ulid = .init(t0, maxInt(u80));
@@ -177,8 +193,8 @@ fn scriptNow(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
 
 fn scriptSecure(userdata: ?*anyopaque, buffer: []u8) std.Io.RandomSecureError!void {
     const self: *SecureScript = @ptrCast(@alignCast(userdata));
-    if (self.fail) return error.EntropyUnavailable;
     self.calls += 1;
+    if (self.fail) return error.EntropyUnavailable;
     @memcpy(buffer, &self.bytes);
 }
 
@@ -189,7 +205,7 @@ test "nextNowSecure fails closed when entropy is unavailable" {
     var g: Generator = .{};
     try testing.expectError(error.EntropyUnavailable, g.nextNowSecure(script.io()));
     try testing.expectEqual(null, g.last);
-    try testing.expectEqual(0, script.calls);
+    try testing.expectEqual(1, script.calls);
 }
 
 test "nextNowSecure does not draw again in the same millisecond" {

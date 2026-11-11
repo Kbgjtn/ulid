@@ -120,3 +120,15 @@ test "parseUuidV7 rejects a bad length, hyphen, digit, version, or variant" {
     bad_variant[19] = 'c';
     try testing.expectError(error.UuidNotV7, Ulid.parseUuidV7(&bad_variant));
 }
+
+test "parseUuidV7 reports length, then character, then version" {
+    // Too long, with a bad character and version 4: the length wins.
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("g17f22e2-79b0-4cc3-98c4-dc0c0c07398f0"));
+    // Version 4 and a bad last digit: the character wins, wherever it is.
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7("017f22e2-79b0-4cc3-98c4-dc0c0c07398g"));
+    // Variant 0b11 and a hyphen moved one place to the right.
+    try testing.expectError(error.UuidInvalidCharacter, Ulid.parseUuidV7("017f22e2-79b0-7cc3-c8c4d-c0c0c07398f"));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7(""));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("urn:uuid:017f22e2-79b0-7cc3-98c4-dc0c0c07398f"));
+    try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("{017f22e2-79b0-7cc3-98c4-dc0c0c07398f}"));
+}

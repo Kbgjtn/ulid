@@ -11,7 +11,7 @@ Requires Zig 0.16.0. MIT licensed.
 - **No allocation.** `encode` writes into a `*[26]u8` and `decode` returns the value. Both work at comptime.
 - **Monotonic generator.** Within one millisecond the random part is incremented by one. Running out of random values is an error that leaves the generator usable. The time and the `std.Random` are arguments, so tests can fix both.
 - **Formatting.** `"{f}"` prints the canonical uppercase form and `fmtLower` the lowercase one.
-- **UUIDv7 conversion.** `toUuidV7`, `fromUuidV7` and `fmtUuid` convert to and from RFC 9562 UUIDv7.
+- **UUIDv7 conversion.** `toUuidV7`, `fromUuidV7` and `fmtUuid` convert to and from RFC 9562 UUIDv7, and `parseUuidV7` reads its text form.
 - **JSON.** `std.json` reads and writes a `Ulid` as its 26-character string. Parsing uses the default decoding rules, and errors map to `std.json`'s `LengthMismatch`, `InvalidCharacter` and `Overflow`.
 - **Reference vectors.** 190 values generated with Go's [oklog/ulid](https://github.com/oklog/ulid) v2 are checked in both directions.
 

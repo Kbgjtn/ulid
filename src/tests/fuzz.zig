@@ -160,6 +160,78 @@ fn fuzzUuid(_: void, smith: *Smith) anyerror!void {
     } else |_| try testing.expect(!is_v7);
 }
 
+/// Bytes biased towards hex digits and the hyphen.
+const uuid_text_weights: []const Smith.Weight = &.{
+    .rangeAtMost(u8, 0x00, 0xff, 1),
+    .rangeAtMost(u8, '0', '9', 8),
+    .rangeAtMost(u8, 'a', 'f', 8),
+    .rangeAtMost(u8, 'A', 'F', 4),
+    .value(u8, '-', 4),
+};
+
+/// A slow, obvious UUID text parser: check the shape of every position,
+/// then collect the hex digits. Written separately from `parseUuidV7`.
+fn refParseUuidV7(text: []const u8) error{ UuidInvalidLength, UuidInvalidCharacter, UuidNotV7 }![16]u8 {
+    if (text.len != 36) return error.UuidInvalidLength;
+    var v: u128 = 0;
+    for (text, 0..) |c, i| {
+        if (i == 8 or i == 13 or i == 18 or i == 23) {
+            if (c != '-') return error.UuidInvalidCharacter;
+            continue;
+        }
+        const d = std.fmt.charToDigit(c, 16) catch return error.UuidInvalidCharacter;
+        v = (v << 4) | d;
+    }
+    if ((v >> 76) & 0xF != 0x7 or (v >> 62) & 0b11 != 0b10) return error.UuidNotV7;
+    var out: [16]u8 = undefined;
+    std.mem.writeInt(u128, &out, v, .big);
+    return out;
+}
+
+fn fuzzUuidText(_: void, smith: *Smith) anyerror!void {
+    var buf: [40]u8 = undefined;
+    var len: usize = 36;
+    if (smith.boolWeighted(1, 3)) {
+        // Well-formed text of random bytes in a random case, then up to two
+        // damaged positions, so the fuzzer gets past the shape checks.
+        var raw: [16]u8 = undefined;
+        smith.bytes(&raw);
+        const digits = if (smith.value(bool)) "0123456789abcdef" else "0123456789ABCDEF";
+        var i: usize = 0;
+        for (raw, 0..) |b, n| {
+            if (n == 4 or n == 6 or n == 8 or n == 10) {
+                buf[i] = '-';
+                i += 1;
+            }
+            buf[i] = digits[b >> 4];
+            buf[i + 1] = digits[b & 0xF];
+            i += 2;
+        }
+        var damage = smith.valueRangeAtMost(u8, 0, 2);
+        while (damage > 0) : (damage -= 1) {
+            buf[smith.valueRangeAtMost(u8, 0, 35)] = smith.valueWeighted(u8, uuid_text_weights);
+        }
+    } else {
+        if (smith.boolWeighted(7, 1)) len = smith.valueRangeAtMost(u8, 0, buf.len);
+        smith.bytesWeighted(buf[0..len], uuid_text_weights);
+    }
+    const text = buf[0..len];
+
+    const got = Ulid.parseUuidV7(text);
+    if (refParseUuidV7(text)) |want| {
+        const u = try got;
+        try testing.expectEqual(want, u.bytes);
+        // Printing gives the lowercase form; parsing that is the identity.
+        var out: [36]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&out);
+        try w.print("{f}", .{u.fmtUuid()});
+        try testing.expect(std.ascii.eqlIgnoreCase(text, &out));
+        try testing.expectEqual(u, try Ulid.parseUuidV7(&out));
+    } else |err| {
+        try testing.expectError(err, got);
+    }
+}
+
 test "fuzz decode against a reference decoder" {
     try testing.fuzz({}, fuzzDecode, .{ .corpus = &.{
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -180,4 +252,14 @@ test "fuzz generator stays monotonic" {
 
 test "fuzz UUIDv7 conversion" {
     try testing.fuzz({}, fuzzUuid, .{});
+}
+
+test "fuzz UUIDv7 text parsing against a reference parser" {
+    try testing.fuzz({}, fuzzUuidText, .{ .corpus = &.{
+        "017f22e2-79b0-7cc3-98c4-dc0c0c07398f",
+        "017F22E2-79B0-7CC3-98C4-DC0C0C07398F",
+        "017f22e2-79b0-4cc3-98c4-dc0c0c07398f",
+        "017f22e2-79b0-7cc3-c8c4-dc0c0c07398f",
+        "017f22e279b0-7cc3-98c4-dc0c0c07398f0",
+    } });
 }
