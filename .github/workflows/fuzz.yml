@@ -3,9 +3,10 @@ name: fuzz
 # Short runs on every push, a long run nightly. The six fuzz tests in
 # src/tests/fuzz.zig run in one `zig build test --fuzz` step, and each
 # test gets the whole run count, so a push runs six million inputs in
-# all. The corpus is cached so each run
-# continues from the last. A crash fails the job and uploads the input
-# as an artifact.
+# all, and the nightly run 60 million, which fits the 90-minute job
+# limit at about 11,000 inputs a second. The corpus is cached so each
+# run continues from the last. A crash fails the job and uploads the
+# input as an artifact.
 #
 # The corpus lives under one cache key. A cache entry cannot be
 # overwritten, so a run that succeeds deletes this branch's entry and
@@ -20,7 +21,7 @@ on:
     inputs:
       runs:
         description: "Runs for each fuzz test"
-        default: "50000000"
+        default: "10000000"
 
 jobs:
   fuzz:
@@ -36,7 +37,7 @@ jobs:
       actions: write # to delete the old corpus cache entry
     env:
       CORPUS_KEY: fuzz-corpus-v1
-      RUNS: ${{ github.event_name == 'push' && '1000000' || inputs.runs || '50000000' }}
+      RUNS: ${{ github.event_name == 'push' && '1000000' || inputs.runs || '10000000' }}
     steps:
       - uses: actions/checkout@v7
 
