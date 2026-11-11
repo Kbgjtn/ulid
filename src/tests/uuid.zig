@@ -132,3 +132,11 @@ test "parseUuidV7 reports length, then character, then version" {
     try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("urn:uuid:017f22e2-79b0-7cc3-98c4-dc0c0c07398f"));
     try testing.expectError(error.UuidInvalidLength, Ulid.parseUuidV7("{017f22e2-79b0-7cc3-98c4-dc0c0c07398f}"));
 }
+
+test "the UUIDv7 functions return the named error sets" {
+    const from = @typeInfo(@typeInfo(@TypeOf(Ulid.fromUuidV7)).@"fn".return_type.?).error_union.error_set;
+    const parse = @typeInfo(@typeInfo(@TypeOf(Ulid.parseUuidV7)).@"fn".return_type.?).error_union.error_set;
+    try testing.expect(from == Ulid.UuidError);
+    try testing.expect(parse == Ulid.UuidParseError);
+    try testing.expect(Ulid.UuidParseError == error{ UuidInvalidLength, UuidInvalidCharacter, UuidNotV7 });
+}

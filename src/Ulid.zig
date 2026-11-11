@@ -184,6 +184,22 @@ pub fn decode(text: []const u8, options: DecodeOptions) DecodeError!Ulid {
     return u;
 }
 
+/// The error from `fromUuidV7`.
+pub const UuidError = error{
+    /// The version nibble is not 7, or the variant bits are not RFC 9562's
+    /// `0b10`.
+    UuidNotV7,
+};
+
+/// The errors from `parseUuidV7`, in the order they are checked.
+pub const UuidParseError = error{
+    /// The text is not exactly 36 bytes long.
+    UuidInvalidLength,
+    /// A hyphen is missing at index 8, 13, 18 or 23, or another byte is
+    /// not a hex digit.
+    UuidInvalidCharacter,
+} || UuidError;
+
 /// Returns `ulid` as an RFC 9562 UUIDv7: the same 16 bytes with the version
 /// nibble (byte 6, high 4 bits) set to 7 and the variant (byte 8, top 2
 /// bits) set to `0b10`. This overwrites 6 of the 80 random bits, so
@@ -200,7 +216,7 @@ pub fn toUuidV7(ulid: Ulid) [16]u8 {
 /// timestamp first, so the bytes are copied unchanged and nothing is lost.
 /// Returns `error.UuidNotV7` unless the version is 7 and the variant is
 /// the RFC 9562 one (`0b10`).
-pub fn fromUuidV7(bytes: [16]u8) error{UuidNotV7}!Ulid {
+pub fn fromUuidV7(bytes: [16]u8) UuidError!Ulid {
     if (bytes[6] >> 4 != 0x07) return error.UuidNotV7;
     if (bytes[8] >> 6 != 0b10) return error.UuidNotV7;
     return .{ .bytes = bytes };
@@ -214,7 +230,7 @@ pub fn fromUuidV7(bytes: [16]u8) error{UuidNotV7}!Ulid {
 /// `error.UuidInvalidCharacter`, from the left. Version and variant are
 /// checked only after the text is well formed, inside `fromUuidV7`.
 /// No allocation. Works at comptime.
-pub fn parseUuidV7(text: []const u8) error{ UuidInvalidLength, UuidInvalidCharacter, UuidNotV7 }!Ulid {
+pub fn parseUuidV7(text: []const u8) UuidParseError!Ulid {
     if (text.len != 36) return error.UuidInvalidLength;
     var bytes: [16]u8 = undefined;
     var i: usize = 0;
