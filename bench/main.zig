@@ -187,7 +187,9 @@ fn FillCase(comptime through_interface: bool) type {
 
 const Table = struct {
     w: *Io.Writer,
-    ours: Stats = undefined,
+    /// The row the last column divides by: ours, or the first row after
+    /// a gap for cases that belong to no library.
+    baseline: Stats = undefined,
 
     fn header(t: *Table) !void {
         try t.w.print("{s:<28} {s:<28} {s:>12} {s:>10} {s:>8}\n", .{
@@ -198,19 +200,19 @@ const Table = struct {
     }
 
     fn row(t: *Table, case: []const u8, comptime L: type, s: Stats) !void {
-        if (L == Ours) t.ours = s;
+        if (L == Ours) t.baseline = s;
         try t.w.print("{s:<28} {s:<28} {d:>12.2} {d:>10.2} {d:>7.2}x\n", .{
-            case, L.name, s.median, s.min, s.median / t.ours.median,
+            case, L.name, s.median, s.min, s.median / t.baseline.median,
         });
         try t.w.flush();
     }
 
     /// A row for a case that belongs to no library. The first row after a
     /// gap is the baseline of the last column.
-    fn rowLabel(t: *Table, case: []const u8, label: []const u8, s: Stats, baseline: bool) !void {
-        if (baseline) t.ours = s;
+    fn rowLabel(t: *Table, case: []const u8, label: []const u8, s: Stats, is_baseline: bool) !void {
+        if (is_baseline) t.baseline = s;
         try t.w.print("{s:<28} {s:<28} {d:>12.2} {d:>10.2} {d:>7.2}x\n", .{
-            case, label, s.median, s.min, s.median / t.ours.median,
+            case, label, s.median, s.min, s.median / t.baseline.median,
         });
         try t.w.flush();
     }

@@ -200,13 +200,13 @@ pub const UuidParseError = error{
     UuidInvalidCharacter,
 } || UuidError;
 
-/// Returns `ulid` as an RFC 9562 UUIDv7: the same 16 bytes with the version
+/// Returns `u` as an RFC 9562 UUIDv7: the same 16 bytes with the version
 /// nibble (byte 6, high 4 bits) set to 7 and the variant (byte 8, top 2
 /// bits) set to `0b10`. This overwrites 6 of the 80 random bits, so
 /// `fromUuidV7(u.toUuidV7())` is not `u` unless those bits already matched.
 /// The timestamp is unchanged.
-pub fn toUuidV7(ulid: Ulid) [16]u8 {
-    var b = ulid.bytes;
+pub fn toUuidV7(u: Ulid) [16]u8 {
+    var b = u.bytes;
     b[6] = (b[6] & 0x0F) | 0x70;
     b[8] = (b[8] & 0x3F) | 0x80;
     return b;
@@ -408,23 +408,31 @@ pub const Generator = struct {
 
     /// Adds one to the 80-bit big-endian random part. Returns false, and
     /// writes nothing, when every byte is already `0xFF`.
-    fn incrementRandom(random: *[10]u8) bool {
+    fn incrementRandom(part: *[10]u8) bool {
         // The carried byte is the last one in all but 1 in 256 calls.
-        if (random[9] != 0xFF) {
-            random[9] += 1;
+        if (part[9] != 0xFF) {
+            part[9] += 1;
             return true;
         }
         var i: usize = 9;
         while (i > 0) {
             i -= 1;
-            if (random[i] != 0xFF) {
-                random[i] += 1;
+            if (part[i] != 0xFF) {
+                part[i] += 1;
                 var j = i + 1;
-                while (j < random.len) : (j += 1) random[j] = 0;
+                while (j < part.len) : (j += 1) part[j] = 0;
                 return true;
             }
         }
         return false;
+    }
+
+    /// The wall clock (`Io.Clock.real`) in milliseconds, clamped to the
+    /// 48-bit range: a time before 1970 is 0, and one past the year 10889
+    /// is `maxInt(u48)`.
+    fn nowMs(io: Io) u48 {
+        const ms = Io.Clock.real.now(io).toMilliseconds();
+        return @intCast(std.math.clamp(ms, 0, std.math.maxInt(u48)));
     }
 
     /// Like `next`, but reads the time and randomness from `io`.
@@ -433,11 +441,11 @@ pub const Generator = struct {
     /// clamped to the 48-bit range. Randomness comes from `io.random`,
     /// which is seeded from secure entropy but falls back to a weaker
     /// source if that is unavailable, and is only drawn when the
-    /// millisecond changes. Tests that need fixed output should call
-    /// `next` with their own clock and RNG.
+    /// millisecond changes. `nextNowSecure` refuses that fallback. Tests
+    /// that need fixed output should call `next` with their own clock and
+    /// RNG.
     pub fn nextNow(g: *Generator, io: Io) Error!Ulid {
-        const ms_i = Io.Clock.real.now(io).toMilliseconds();
-        const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
+        const ms = nowMs(io);
         const source: std.Random.IoSource = .{ .io = io };
         return g.next(ms, source.interface());
     }
@@ -449,8 +457,7 @@ pub const Generator = struct {
     /// monotonic rules of `next` and do not draw. `error.EntropyUnavailable`
     /// and `error.Canceled` leave `last` unchanged.
     pub fn nextNowSecure(g: *Generator, io: Io) (Error || Io.RandomSecureError)!Ulid {
-        const ms_i = Io.Clock.real.now(io).toMilliseconds();
-        const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
+        const ms = nowMs(io);
         if (try g.advance(ms)) |u| return u;
         // Draw into a local, so a failed draw leaves last unchanged.
         var u: Ulid = undefined;

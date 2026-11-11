@@ -24,6 +24,11 @@ on:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    # One run per branch at a time, so two runs cannot both delete the
+    # corpus entry and race to save it. A queued run waits, not cancels.
+    concurrency:
+      group: fuzz-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 90
     permissions:
       contents: read
