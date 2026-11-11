@@ -338,27 +338,35 @@ pub const Generator = struct {
     /// Returns a ULID greater than every earlier one from this generator.
     ///
     /// A timestamp `ms` later than the last one draws a fresh random part
-    /// from `random`. The same timestamp increments the last random part
-    /// by one, and returns `error.UlidMonotonicOverflow` if it is already
-    /// at its maximum. An earlier `ms` is handled as `on_backwards` says.
+    /// from `random`: 10 bytes, stored in the order drawn. The same
+    /// timestamp increments the last random part by one, and returns
+    /// `error.UlidMonotonicOverflow` if it is already at its maximum. An
+    /// earlier `ms` is handled as `on_backwards` says.
     /// On error, `last` is unchanged.
     pub fn next(g: *Generator, ms: u48, random: std.Random) Error!Ulid {
-        // Update last in place, so the same-ms path touches only the
-        // random bytes instead of copying the whole optional out and back.
-        if (g.last) |*last| {
-            const last_ts = std.mem.readInt(u48, last.bytes[0..6], .big);
-            if (ms > last_ts) {
-                last.* = Ulid.init(ms, random.int(u80));
-                return last.*;
-            }
-            if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
-            // Same ms, or a clamped backwards clock. A full 0xFF part is
-            // left untouched.
-            if (!incrementRandom(last.bytes[6..16])) return error.UlidMonotonicOverflow;
-            return last.*;
-        }
-        g.last = Ulid.init(ms, random.int(u80));
-        return g.last.?;
+        if (try g.advance(ms)) |u| return u;
+        // Write the new id into last in place. The drawn bytes are stored
+        // as drawn, with no integer in between.
+        g.last = @as(Ulid, undefined);
+        const last = &g.last.?;
+        std.mem.writeInt(u48, last.bytes[0..6], ms, .big);
+        random.bytes(last.bytes[6..16]);
+        return last.*;
+    }
+
+    /// The part of `next` that needs no randomness. Returns null when
+    /// `ms` calls for a fresh random part: there is no last id, or `ms` is
+    /// later than its timestamp. Otherwise increments `last` in place and
+    /// returns it, or fails and leaves it unchanged.
+    fn advance(g: *Generator, ms: u48) Error!?Ulid {
+        const last = if (g.last) |*l| l else return null;
+        const last_ts = std.mem.readInt(u48, last.bytes[0..6], .big);
+        if (ms > last_ts) return null;
+        if (ms < last_ts and g.on_backwards == .fail) return error.UlidClockBackwards;
+        // Same ms, or a clamped backwards clock. A full 0xFF part is
+        // left untouched.
+        if (!incrementRandom(last.bytes[6..16])) return error.UlidMonotonicOverflow;
+        return last.*;
     }
 
     /// Adds one to the 80-bit big-endian random part. Returns false, and
@@ -406,22 +414,12 @@ pub const Generator = struct {
     pub fn nextNowSecure(g: *Generator, io: Io) (Error || Io.RandomSecureError)!Ulid {
         const ms_i = Io.Clock.real.now(io).toMilliseconds();
         const ms: u48 = @intCast(std.math.clamp(ms_i, 0, std.math.maxInt(u48)));
-        const draw = if (g.last) |last| ms > last.timestamp() else true;
-        if (!draw) {
-            var marker: u8 = undefined;
-            return g.next(ms, .{ .ptr = &marker, .fillFn = refuseDraw });
-        }
-        var raw: [10]u8 = undefined;
-        try io.randomSecure(&raw);
-        return g.next(ms, .{ .ptr = &raw, .fillFn = fillDrawn });
+        if (try g.advance(ms)) |u| return u;
+        // Draw into a local, so a failed draw leaves last unchanged.
+        var u: Ulid = undefined;
+        std.mem.writeInt(u48, u.bytes[0..6], ms, .big);
+        try io.randomSecure(u.bytes[6..16]);
+        g.last = u;
+        return u;
     }
 };
-
-fn fillDrawn(ptr: *anyopaque, dest: []u8) void {
-    const raw: *const [10]u8 = @ptrCast(@alignCast(ptr));
-    @memcpy(dest, raw);
-}
-
-fn refuseDraw(_: *anyopaque, _: []u8) void {
-    unreachable;
-}

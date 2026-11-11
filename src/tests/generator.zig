@@ -92,6 +92,29 @@ test "later millisecond draws fresh randomness" {
     try testing.expect(b.randomness() != a.randomness() +% 1);
 }
 
+fn fillCounting(counter: *u8, dest: []u8) void {
+    for (dest) |*d| {
+        counter.* += 1;
+        d.* = counter.*;
+    }
+}
+
+test "a fresh draw takes 10 bytes and stores them in the order drawn" {
+    var counter: u8 = 0;
+    const random: std.Random = .{ .ptr = &counter, .fillFn = @ptrCast(&fillCounting) };
+    var g: Generator = .{};
+    const a = try g.next(t0, random);
+    try testing.expectEqual(t0, a.timestamp());
+    try testing.expectEqual(@as(u80, 0x0102_0304_0506_0708_090a), a.randomness());
+    try testing.expectEqual(10, counter);
+    // The same millisecond draws nothing.
+    _ = try g.next(t0, random);
+    try testing.expectEqual(10, counter);
+    const b = try g.next(t0 + 1, random);
+    try testing.expectEqual(@as(u80, 0x0b0c_0d0e_0f10_1112_1314), b.randomness());
+    try testing.expectEqual(20, counter);
+}
+
 test "first call uses given time" {
     var prng: std.Random.DefaultPrng = .init(7);
     var g: Generator = .{};
@@ -248,7 +271,7 @@ test "nextNowSecure does not draw again in the same millisecond" {
     try testing.expectEqual(a.timestamp(), b.timestamp());
     try testing.expectEqual(a.randomness() + 1, b.randomness());
     try testing.expectEqual(1, script.calls);
-    try testing.expectEqual(std.mem.readInt(u80, &secure_bytes, .little), a.randomness());
+    try testing.expectEqual(std.mem.readInt(u80, &secure_bytes, .big), a.randomness());
 }
 
 test "nextNowSecure draws again on a later millisecond" {
@@ -262,7 +285,7 @@ test "nextNowSecure draws again on a later millisecond" {
     script.bytes = later_bytes;
     const u = try g.nextNowSecure(script.io());
     try testing.expectEqual(@as(u48, @intCast(later)), u.timestamp());
-    try testing.expectEqual(std.mem.readInt(u80, &later_bytes, .little), u.randomness());
+    try testing.expectEqual(std.mem.readInt(u80, &later_bytes, .big), u.randomness());
     try testing.expectEqual(2, script.calls);
 }
 

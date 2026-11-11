@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. `nextNowSecure` draws from `io.randomSecure` instead, and returns `error.EntropyUnavailable` when the operating system cannot provide entropy. A call that stays in the same millisecond does not draw. To pick the clock or RNG yourself, call `next(ms, random)` instead.
+`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. `nextNowSecure` draws from `io.randomSecure` instead, and returns `error.EntropyUnavailable` when the operating system cannot provide entropy. A call that stays in the same millisecond does not draw. To pick the clock or RNG yourself, call `next(ms, random)` instead. `io.random` is a ChaCha generator per thread, so each new millisecond costs about 15 ns of randomness. Where IDs need not be unguessable, a seeded `std.Random.DefaultPrng` passed to `next` is faster, but its output can be predicted from earlier IDs.
 
 In tests, pass a fixed time and a seeded generator:
 
@@ -137,9 +137,9 @@ Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0
 | encode | 6.8 | 8.5 | 6.8 | 9.3 |
 | decode | 12.5 | 12.8 | 196 | 35 |
 | `next`, same ms | 5.0 | 5.5 | | |
-| `next`, new ms, `Io.random` | 26.2 | 23.5 | | |
+| `next`, new ms, `Io.random` | 25.4 | 23.2 | | |
 
-Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is level with hendriknielaender too. That row was measured again on 10 Nov 2026 on the same machine, without pinning: 5.02 ns against 5.47 ns. The other rows are still the 2 Nov numbers.
+Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is level with hendriknielaender too. That row was measured again on 10 Nov 2026 on the same machine, without pinning: 5.02 ns against 5.47 ns. The new-millisecond row was measured on 11 Nov 2026 pinned to one core, taking the middle of three runs; hendriknielaender's is still about 2 ns faster there. The other rows are still the 2 Nov numbers.
 
 A SWAR decode was tried and dropped because it ran slower (13.4 to 16.8 ns). The 26 table lookups dominate decode time, not the shifts that combine the digits.
 

@@ -168,6 +168,23 @@ fn NextCase(comptime L: type, comptime same_ms: bool) type {
     };
 }
 
+/// Fills 10 bytes, the random part of one ULID, by calling `io.random`
+/// directly or through `std.Random.IoSource`. The difference is what the
+/// `std.Random` interface costs `next` on a new millisecond.
+fn FillCase(comptime through_interface: bool) type {
+    return struct {
+        io: Io,
+        random: std.Random,
+        buf: [10]u8 = undefined,
+
+        fn run(c: *@This(), i: usize) void {
+            _ = i;
+            if (through_interface) c.random.bytes(&c.buf) else c.io.random(&c.buf);
+            std.mem.doNotOptimizeAway(&c.buf);
+        }
+    };
+}
+
 const Table = struct {
     w: *Io.Writer,
     ours: Stats = undefined,
@@ -184,6 +201,16 @@ const Table = struct {
         if (L == Ours) t.ours = s;
         try t.w.print("{s:<28} {s:<28} {d:>12.2} {d:>10.2} {d:>7.2}x\n", .{
             case, L.name, s.median, s.min, s.median / t.ours.median,
+        });
+        try t.w.flush();
+    }
+
+    /// A row for a case that belongs to no library. The first row after a
+    /// gap is the baseline of the last column.
+    fn rowLabel(t: *Table, case: []const u8, label: []const u8, s: Stats, baseline: bool) !void {
+        if (baseline) t.ours = s;
+        try t.w.print("{s:<28} {s:<28} {d:>12.2} {d:>10.2} {d:>7.2}x\n", .{
+            case, label, s.median, s.min, s.median / t.ours.median,
         });
         try t.w.flush();
     }
@@ -278,6 +305,14 @@ pub fn main(init: std.process.Init) !void {
             var c: NextCase(L, false) = .{ .gen = .init(io, io_random) };
             try t.row("next, new ms, Io.random", L, measure(io, &c));
         }
+    }
+
+    try t.gap();
+    {
+        var direct: FillCase(false) = .{ .io = io, .random = io_random };
+        try t.rowLabel("10 random bytes", "io.random", measure(io, &direct), true);
+        var wrapped: FillCase(true) = .{ .io = io, .random = io_random };
+        try t.rowLabel("10 random bytes", "std.Random.IoSource", measure(io, &wrapped), false);
     }
     try w.flush();
 }
