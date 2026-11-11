@@ -1,109 +1,95 @@
 # ulid
 
-A [ULID](https://github.com/ulid/spec) library for Zig. A ULID is a 128-bit identifier whose bytes and text both sort by the time it was made. This library decodes strictly, never allocates, and generates monotonic IDs from a clock and random source that the caller passes in.
+A [ULID](https://github.com/ulid/spec) library for Zig 0.16.0.
 
-Requires Zig 0.16.0. MIT licensed.
+A ULID is a 128-bit ID: a 48-bit Unix timestamp in milliseconds, then 80 random bits. IDs sort by creation time, whether you compare their bytes or their text. This library:
 
-## Features
+- decodes strictly and reports each kind of bad input as its own error;
+- never allocates, and encodes and decodes at comptime;
+- generates strictly increasing IDs from a clock and random source you can replace in tests;
+- converts to and from UUIDv7, and reads and writes `std.json`.
 
-- **Layout.** A `Ulid` is 16 big-endian bytes: a 48-bit Unix time in milliseconds, then 80 random bits. Comparing the bytes, the text or `order` gives the same time order.
-- **Strict decoding.** Exactly 26 characters of Crockford base32. Each failure has its own error, reported in a fixed order. A first character above `7`, which would need more than 128 bits, is an error rather than silently truncated.
-- **No allocation.** `encode` writes into a `*[26]u8` and `decode` returns the value. Both work at comptime.
-- **Monotonic generator.** Within one millisecond the random part is incremented by one. Running out of random values is an error that leaves the generator usable. The time and the `std.Random` are arguments, so tests can fix both.
-- **Formatting.** `"{f}"` prints the canonical uppercase form and `fmtLower` the lowercase one.
-- **UUIDv7 conversion.** `toUuidV7`, `fromUuidV7` and `fmtUuid` convert to and from RFC 9562 UUIDv7, and `parseUuidV7` reads its text form.
-- **JSON.** `std.json` reads and writes a `Ulid` as its 26-character string. Parsing uses the default decoding rules, and errors map to `std.json`'s `LengthMismatch`, `InvalidCharacter` and `Overflow`.
-- **Reference vectors.** 190 values generated with Go's [oklog/ulid](https://github.com/oklog/ulid) v2 are checked in both directions.
+MIT licensed. No dependencies.
 
-## Installation
-
-Fetch the package.
+## Install
 
 ```sh
 zig fetch --save https://codeberg.org/Kbgjtn/ulid/archive/<version>.tar.gz
 ```
 
-Add the module in `build.zig`:
+In `build.zig`:
 
 ```zig
 const ulid_dep = b.dependency("ulid", .{ .target = target, .optimize = optimize });
 exe.root_module.addImport("ulid", ulid_dep.module("ulid"));
 ```
 
-## Examples
+## Quick start
 
 ```zig
 const std = @import("std");
 const Ulid = @import("ulid");
-```
 
-Generate a ULID from the system clock and print it in both cases:
-
-```zig
 pub fn main(init: std.process.Init) !void {
-    const io = init.io;
-
     var gen: Ulid.Generator = .{};
-    const id = try gen.nextNow(io);
+    const id = try gen.nextNow(init.io);
+    std.debug.print("{f}\n", .{id}); // 01M75H48CMBZ4S09TR80Z45T1Q
 
-    var buf: [64]u8 = undefined;
-    var stdout: std.Io.File.Writer = .init(.stdout(), io, &buf);
-    try stdout.interface.print("{f} {f}\n", .{ id, id.fmtLower() });
-    try stdout.interface.flush();
+    const parsed = try Ulid.decode("01ARZ3NDEKTSV4RRFFQ69G5FAV", .{});
+    std.debug.print("{d}\n", .{parsed.timestamp()}); // 1469922850259
 }
 ```
 
-`nextNow` reads `Clock.real` (Unix time in milliseconds, clamped to 48 bits, which lasts until the year 10889) and draws randomness from `io.random`. `nextNowSecure` draws from `io.randomSecure` instead, and returns `error.EntropyUnavailable` when the operating system cannot provide entropy. A call that stays in the same millisecond does not draw. To pick the clock or RNG yourself, call `next(ms, random)` instead. `io.random` is a ChaCha generator per thread, so each new millisecond costs about 15 ns of randomness. Where IDs need not be unguessable, a seeded `std.Random.DefaultPrng` passed to `next` is faster, but its output can be predicted from earlier IDs.
+## Examples
 
-In tests, pass a fixed time and a seeded generator:
+[`examples/usecases.zig`](examples/usecases.zig) is one runnable file with a function per use case:
 
-```zig
-test "same millisecond, fixed seed" {
-    var prng: std.Random.DefaultPrng = .init(42);
-    var gen: Ulid.Generator = .{};
-    const a = try gen.next(1_700_000_000_000, prng.random());
-    const b = try gen.next(1_700_000_000_000, prng.random());
-    try std.testing.expectEqual(a.randomness() + 1, b.randomness());
-}
-```
+1. Generate IDs from the wall clock.
+2. Generate unguessable IDs for tokens and public URLs.
+3. Generate fixed IDs in tests.
+4. Parse user input, with a message per error.
+5. Read when an ID was made.
+6. Query a time range by ID.
+7. Store IDs as 16 raw bytes.
+8. Convert to and from UUIDv7.
+9. Read and write JSON.
+10. Share one generator between tasks.
+11. Decode constant IDs at compile time.
 
-Decode with options, and encode into a buffer:
+Run it with `zig build example`. `zig build test` compiles it, so it always matches the API.
 
-```zig
-/// Returns the ULID in `text`, or null if it is not one. Accepts I, L and O
-/// as Crockford aliases for 1, 1 and 0.
-fn parse(text: []const u8) ?Ulid {
-    return Ulid.decode(text, .{ .aliases = true }) catch |err| switch (err) {
-        error.UlidInvalidLength, error.UlidInvalidCharacter, error.UlidOverflow => null,
-    };
-}
+## API
 
-/// Writes the canonical text of `id` to `out` and returns its timestamp.
-fn canonical(id: Ulid, out: *[Ulid.encoded_len]u8) u48 {
-    id.encode(out);
-    return id.timestamp();
-}
-```
+| Declaration | Does | Errors |
+|---|---|---|
+| `Ulid` | 16 bytes, big-endian: timestamp, then randomness. | |
+| `Ulid.init(ms, random)` | Builds an ID from a `u48` timestamp and a `u80` random part. | |
+| `timestamp()`, `randomness()` | Return the two parts. | |
+| `order(a, b)` | Compares by time, then randomness. Same as comparing bytes or text. | |
+| `encode(out)` | Writes the 26-character uppercase text into a `*[26]u8`. | |
+| `decode(text, options)` | Parses 26 characters of Crockford base32. | `DecodeError` |
+| `"{f}"`, `fmtLower()` | Print uppercase or lowercase text. | |
+| `toUuidV7()`, `fmtUuid()` | Return or print the ID as a UUIDv7. | |
+| `fromUuidV7(bytes)` | Reads 16 UUIDv7 bytes. | `UuidError` |
+| `parseUuidV7(text)` | Reads `8-4-4-4-12` UUID text, either hex case. | `UuidParseError` |
+| `Generator.next(ms, random)` | Next ID for a time and RNG you pass in. | `Generator.Error` |
+| `Generator.nextNow(io)` | Next ID from the wall clock and `io.random`. | `Generator.Error` |
+| `Generator.nextNowSecure(io)` | Next ID from the wall clock and `io.randomSecure`. | `Generator.Error`, `Io.RandomSecureError` |
 
-Decoding works at comptime:
+`std.json` support is through `jsonStringify`, `jsonParse` and `jsonParseFromValue`; you don't call them directly.
 
-```zig
-const example = Ulid.decode("01ARZ3NDEKTSV4RRFFQ69G5FAV", .{}) catch unreachable;
+## Decoding
 
-test "decoded at comptime" {
-    try std.testing.expectEqual(@as(u48, 1469922850259), example.timestamp());
-}
-```
+`decode` accepts exactly 26 characters and checks them in this order:
 
-## Decoding rules
+1. Wrong length: `error.UlidInvalidLength`.
+2. A character outside the alphabet, scanning left to right: `error.UlidInvalidCharacter`.
+3. A first character above `7`, which would need more than 128 bits: `error.UlidOverflow`.
 
-The spec leaves several cases open, and libraries disagree on them. This library picks:
+`DecodeOptions` controls what counts as a valid character:
 
-- **Lowercase is accepted** (`DecodeOptions.lowercase = true`), since the spec says decoding ignores case. Set it to `false` to accept only the canonical uppercase form.
-- **Aliases are off** (`DecodeOptions.aliases = false`). Crockford base32 allows reading `I` and `L` as `1` and `O` as `0`, but accepting them by default would let two different strings mean one ID. `U` is never accepted.
-- **A backwards clock clamps** (`Generator.on_backwards = .clamp`). If `ms` is earlier than the last timestamp, the generator keeps the last timestamp and increments the random part, so IDs stay ordered. `.fail` returns `error.UlidClockBackwards` instead.
-
-`decode` checks the length first (`UlidInvalidLength`), then the characters from left to right (`UlidInvalidCharacter`). Only the first character can give `UlidOverflow`. Any error from `Generator.next` leaves `last` unchanged.
+- `lowercase` (default `true`): accept `a`-`z`. The spec says decoding ignores case.
+- `aliases` (default `false`): read `I` and `L` as `1` and `O` as `0`. Off by default, so one ID has one spelling. `U` is never accepted.
 
 Compared with oklog/ulid v2.1.2 and Rust's [ulid](https://github.com/dylanhart/ulid-rs) crate:
 
@@ -115,22 +101,51 @@ Compared with oklog/ulid v2.1.2 and Rust's [ulid](https://github.com/dylanhart/u
 | First character above `7` | `UlidOverflow` | overflow error | overflow error | accepted; the top bits are dropped |
 | Clock goes backwards | clamps, or fails with `.fail` | | | clamps |
 
+## Generator
+
+Every ID from one `Generator` is greater than the one before.
+
+- **Later millisecond:** draws a new 80-bit random part.
+- **Same millisecond:** adds 1 to the last random part. After 2^80 IDs in one millisecond it returns `error.UlidMonotonicOverflow`.
+- **Earlier millisecond:** with `on_backwards = .clamp` (the default), keeps the last timestamp and adds 1. With `.fail`, returns `error.UlidClockBackwards`.
+- **Any error** leaves `last` unchanged, so the generator stays usable.
+
+Where the randomness comes from:
+
+| Function | Clock | Randomness |
+|---|---|---|
+| `next(ms, random)` | yours | yours, for example a seeded `std.Random.DefaultPrng` in tests |
+| `nextNow(io)` | `Io.Clock.real` | `io.random`: a per-thread ChaCha generator, seeded from the OS, with a weaker fallback seed if the OS has no entropy |
+| `nextNowSecure(io)` | `Io.Clock.real` | `io.randomSecure`: OS entropy, or `error.EntropyUnavailable`; never a fallback |
+
+The clock is clamped to the 48-bit range, which lasts until the year 10889. A call in the same millisecond draws no randomness. A seeded non-cryptographic RNG passed to `next` is faster, but its IDs can be predicted from earlier ones.
+
+`Generator` has no lock. To share one between threads, guard it with a `std.Io.Mutex`; to avoid the lock, give each thread its own generator.
+
 ## UUIDv7
 
-A ULID and a UUIDv7 share their layout: a 48-bit big-endian millisecond timestamp followed by 80 bits, of which UUIDv7 spends 6 on its version and variant.
+A UUIDv7 has the same layout as a ULID, except that 6 of the 80 random bits hold its version and variant.
 
-- `fromUuidV7` keeps all 128 bits. It returns `error.UuidNotV7` unless the version is 7 and the variant is RFC 9562's `0b10`.
-- `toUuidV7` sets those 6 bits, overwriting 6 random bits, so converting back gives a different ULID with the same timestamp. IDs from different milliseconds keep their order.
-- `"{f}"` with `fmtUuid` prints the lowercase `8-4-4-4-12` form, such as `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`.
-- `parseUuidV7` reads that form back. Hex may be either case. A bad length, hyphen, or hex digit fails before the version and variant check. Its errors are `UuidParseError`, and `fromUuidV7`'s are `UuidError`.
+- `toUuidV7` sets those 6 bits. Converting back gives an ID with the same timestamp but a different random part. IDs from different milliseconds keep their order.
+- `fromUuidV7` keeps all 128 bits, and returns `error.UuidNotV7` unless the version is 7 and the variant is RFC 9562's `0b10`.
+- `fmtUuid` prints lowercase `8-4-4-4-12` text, such as `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`.
+- `parseUuidV7` reads that text in either case. It checks the length (`UuidInvalidLength`), then the hyphens and hex digits (`UuidInvalidCharacter`), then the version and variant (`UuidNotV7`).
 
-## Thread safety
+## JSON
 
-`Generator` has no lock on purpose, so single-threaded code pays nothing for one. To share a generator between threads, guard it with a `std.Io.Mutex`. For independent IDs, give each thread its own generator.
+A `Ulid` reads and writes as its 26-character string, for example as a struct field. Parsing uses the default `DecodeOptions` and allocates nothing. Errors map to `std.json`'s own:
+
+| `decode` error | `std.json` error |
+|---|---|
+| `UlidInvalidLength` | `LengthMismatch` |
+| `UlidInvalidCharacter` | `InvalidCharacter` |
+| `UlidOverflow` | `Overflow` |
+
+A JSON value that is not a string returns `UnexpectedToken`.
 
 ## Performance
 
-Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0, ReleaseFast, on a Ryzen 3 3300X pinned to 4 cores, taking the middle of three runs.
+Median ns per operation, lower is better. Zig 0.16.0, ReleaseFast, Ryzen 3 3300X, middle of three runs.
 
 | Case | ulid (this) | [hendriknielaender](https://github.com/hendriknielaender/ulid.zig) | [jkoop](https://github.com/jkoop/ulid-zig) | [leroycep](https://github.com/leroycep/zig-ulid) |
 |---|---|---|---|---|
@@ -139,27 +154,27 @@ Median ns per operation, lower is better. Measured on 2 Nov 2026 with Zig 0.16.0
 | `next`, same ms | 5.0 | 5.5 | | |
 | `next`, new ms, `Io.random` | 25.4 | 23.2 | | |
 
-Encode ties jkoop, and decode is level with hendriknielaender, since differences of about 1 ns are within this bench's noise. Same-millisecond `next` is level with hendriknielaender too. That row was measured again on 10 Nov 2026 on the same machine, without pinning: 5.02 ns against 5.47 ns. The new-millisecond row was measured on 11 Nov 2026 pinned to one core, taking the middle of three runs; hendriknielaender's is still about 2 ns faster there. The other rows are still the 2 Nov numbers.
+Differences of about 1 ns are within noise. Encode, decode and same-millisecond `next` are level with the fastest rival; hendriknielaender is about 2 ns faster on a new millisecond. Encode and decode were measured on 2 Nov 2026 pinned to 4 cores, same-millisecond `next` on 10 Nov unpinned, and new-millisecond `next` on 11 Nov pinned to one core.
 
-A SWAR decode was tried and dropped because it ran slower (13.4 to 16.8 ns). The 26 table lookups dominate decode time, not the shifts that combine the digits.
-
-To reproduce, fetch the other libraries and run the bench:
+To reproduce:
 
 ```sh
 bench/fetch-rivals.sh
 zig build bench -Dcompare
 ```
 
-## Testing
+## Development
 
-| Command | Runs |
+| Command | Does |
 |---|---|
-| `zig build test` | Encode, decode, generator, UUIDv7, JSON and comptime tests, the oklog vectors, and one pass of each fuzz test |
-| `zig build test -Dllvm --fuzz=1M` | The fuzz tests for a million runs each (LLVM is needed for coverage) |
+| `zig build test` | All tests: encode, decode, generator, UUIDv7, JSON, comptime, the oklog vectors, one pass of each fuzz test; also compiles the examples |
+| `zig build test -Dllvm --fuzz=1M` | Fuzzes each fuzz test for a million runs (LLVM is needed for coverage) |
+| `zig build example` | Runs `examples/usecases.zig` |
+| `zig build bench` | Runs the benchmark (ReleaseFast) |
 
-CI (`.github/workflows/`) runs fmt, build and test in Debug and ReleaseSafe on every push, plus a short fuzz run per push and a long one nightly.
+CI runs fmt, build and test in Debug and ReleaseSafe on every push, a short fuzz run per push and a long one nightly.
 
-The vectors in `src/tests/vectors_data.zig` are generated by `tools/gen-vectors.go`, which needs Go:
+The reference vectors in `src/tests/vectors_data.zig` come from Go's [oklog/ulid](https://github.com/oklog/ulid) v2 and are checked in both directions. Regenerate them with Go:
 
 ```sh
 (cd tools && go run .) > src/tests/vectors_data.zig && zig fmt src/tests/vectors_data.zig
